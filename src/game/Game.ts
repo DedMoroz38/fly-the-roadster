@@ -74,6 +74,16 @@ export class Game {
     return () => this.listeners.delete(fn);
   }
 
+  /** Space on the menu is consumed here so it cannot also fire the lift thrusters. */
+  startRun() {
+    if (this.session.state !== 'ready') return;
+    this.input.clearUntilRelease();
+    this.session.startRun();
+    this.stepper.reset();
+    this.last = performance.now();
+    this.emit(true);
+  }
+
   restart() {
     this.session.restart();
     this.stepper.reset();
@@ -108,23 +118,27 @@ export class Game {
     this.last = now;
     const s = this.session;
 
-    // Meta keys are edge-triggered and work in every state.
-    if (this.input.consumePress('restart')) this.restart();
-    if (this.input.consumePress('pause')) {
-      if (s.helpOpen && s.state !== 'ready') this.toggleHelp();
-      else this.togglePause();
+    if (s.state === 'ready') {
+      if (this.input.consumePress('thrust')) this.startRun();
+      // No shortcut can bypass the menu or queue a later action.
+      for (const action of ['restart', 'pause', 'help', 'debug'] as const) this.input.consumePress(action);
+    } else {
+      if (this.input.consumePress('restart')) this.restart();
+      if (this.input.consumePress('pause')) {
+        if (s.helpOpen) this.toggleHelp();
+        else this.togglePause();
+      }
+      if (this.input.consumePress('help')) this.toggleHelp();
+      if (this.input.consumePress('debug')) { s.debugEnabled = !s.debugEnabled; this.emit(true); }
     }
-    if (this.input.consumePress('help')) this.toggleHelp();
-    if (this.input.consumePress('debug')) { s.debugEnabled = !s.debugEnabled; this.emit(true); }
 
     const before = s.state;
     const course = s.sim.level as Course;
     course.update(s.sim.distance);
     const waiting = course.needsBuffer(s.sim.distance);
-    if (waiting) this.stepper.reset();
-    const steps = waiting ? 0 : this.stepper.advance(dt);
+    if (waiting || s.state !== 'running') this.stepper.reset();
+    const steps = waiting || s.state !== 'running' ? 0 : this.stepper.advance(dt);
     for (let i = 0; i < steps; i++) s.step(this.input.sample());
-    if (s.state !== 'running') this.input.consumePress('suction'); // don't queue toggles while stopped
 
     if (this.renderedAttempt !== s.attempt) {
       this.renderer.reset();
@@ -132,7 +146,8 @@ export class Game {
     }
     const alpha = s.state === 'running' && !waiting ? this.stepper.alpha : 1;
     this.renderer.debugEnabled = s.debugEnabled;
-    this.renderer.render(s.sim, alpha, s.state === 'running' && !waiting ? dt : 0, dt);
+    // The menu has its own showroom; don't draw a second hidden WebGL scene underneath it.
+    if (s.state !== 'ready') this.renderer.render(s.sim, alpha, s.state === 'running' && !waiting ? dt : 0, dt);
     this.emit(before !== s.state);
     this.raf = requestAnimationFrame(this.frame);
   };

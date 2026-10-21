@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Game } from '../game/Game';
 import { FAIL_TEXT, SessionSnapshot } from '../game/session';
 import { CONFIG } from '../game/config';
+import { MainMenu } from './MainMenu';
 
 const SUCTION_LABEL: Record<string, string> = {
   off: 'OFF',
@@ -23,7 +24,7 @@ const CONTROLS: [string, string][] = [
   ['Space', 'Main thrusters (push away from wheels)'],
   ['← / →', 'Roll left / right (also works on the floor)'],
   ['A / D', 'Steer on a surface'],
-  ['E', 'Toggle suction'],
+  ['Hold E', 'Engage suction · release to let go'],
   ['R', 'Restart'],
   ['Esc', 'Pause'],
   ['H', 'Show / hide this help'],
@@ -64,7 +65,7 @@ export function DebugPanel({ snapshot: s }: { snapshot: SessionSnapshot }) {
   );
 }
 
-function HelpPanel({ ready }: { ready: boolean }) {
+function HelpPanel() {
   return (
     <div className="panel help">
       <h1>Fly the Roadster</h1>
@@ -80,14 +81,14 @@ function HelpPanel({ ready }: { ready: boolean }) {
         </tbody>
       </table>
       <ul className="tips">
-        <li>Floors hold you by gravity. Walls and ceilings need <b>suction</b> (E) with the wheels facing them.</li>
+        <li>Floors hold you by gravity. On walls and ceilings, <b>hold E for suction</b> with the wheels facing them.</li>
         <li>Lift thrusters push away from the wheels — roll first to aim them. A full tank provides 5 s of lift.</li>
         <li>Grab the green <span className="fuel-word">fuel cells</span> to refill. Acceleration, lift, roll and suction share fuel.</li>
-        <li>Switch suction off on the floor: it heats quickly and adds drag. After overheating, cool below {Math.round(CONFIG.suction.recoveryHeat / CONFIG.suction.criticalHeat * 100)}% and press E again.</li>
+        <li>Release E on the floor to cool and avoid drag. Overheated suction stays off until heat drops below {Math.round(CONFIG.suction.recoveryHeat / CONFIG.suction.criticalHeat * 100)}%; holding E then engages it again.</li>
         <li>Cruising is automatic and uses no fuel. Release W / ↑ to ease back to cruise speed.</li>
         <li>Landing on the roof ends the run. Roll upright before returning to the road.</li>
       </ul>
-      <p className="cta">{ready ? 'Cruise starts automatically' : 'Press H or Esc to resume'}</p>
+      <p className="cta">Press H or Esc to resume</p>
     </div>
   );
 }
@@ -108,6 +109,7 @@ export function Hud({ game }: { game: Game | null }) {
     lastRefuels.current = s.refuels;
   }, [s?.refuels]);
   if (!s) return <div className="hud"><div className="loading">Loading…</div></div>;
+  if (s.state === 'ready') return <MainMenu onStart={() => game?.startRun()} seed={s.seed} />;
 
   const fuelPct = Math.round(s.fuel * 100);
   const heatPct = Math.round(s.suctionHeat / CONFIG.suction.criticalHeat * 100);
@@ -156,9 +158,9 @@ export function Hud({ game }: { game: Game | null }) {
       </div>
 
       <div className="seed">seed {s.seed}</div>
-      <div className="control-hint">AUTO CRUISE · Space lift · ← → roll · E suction · H help · F3 debug</div>
+      <div className="control-hint">AUTO CRUISE · Space lift · ← → roll · Hold E suction · H help · F3 debug</div>
 
-      {s.helpOpen && <div className="overlay"><HelpPanel ready={s.state === 'ready'} /></div>}
+      {s.helpOpen && <div className="overlay"><HelpPanel /></div>}
       {s.state === 'paused' && !s.helpOpen && (
         <div className="overlay">
           <div className="panel">

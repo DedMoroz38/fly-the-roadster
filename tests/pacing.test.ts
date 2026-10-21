@@ -68,12 +68,18 @@ describe('opening challenge pacing', () => {
     } finally { chance.mockRestore(); }
   }, 30000);
 
-  it('raises difficulty during the first kilometre while retaining a gradual bounded curve', () => {
+  it('raises opening difficulty by 50% and continues increasing after the first kilometre', () => {
     expect(difficultyAt(0)).toBe(0);
-    expect(difficultyAt(500)).toBeGreaterThan(0.18);
-    expect(difficultyAt(500)).toBeLessThan(0.2);
-    expect(difficultyAt(1000)).toBeGreaterThan(0.27);
-    expect(difficultyAt(1000)).toBeLessThan(0.3);
-    expect(difficultyAt(5000)).toBeLessThan(0.5);
+    for (const distance of [100, 250, 500, 1000]) {
+      const previousLog = Math.log1p(distance / 850);
+      const previousDifficulty = previousLog / (previousLog + 2);
+      expect(difficultyAt(distance)).toBeCloseTo(previousDifficulty * 1.5, 8);
+    }
+    const distances = [0, 100, 500, 999, 1000, 1001, 2000, 5000, 1000000];
+    for (let i = 1; i < distances.length; i++) {
+      expect(difficultyAt(distances[i])).toBeGreaterThan(difficultyAt(distances[i - 1]));
+      expect(difficultyAt(distances[i])).toBeLessThan(1);
+    }
+    expect(difficultyAt(1001) - difficultyAt(999)).toBeLessThan(0.001);
   });
 });

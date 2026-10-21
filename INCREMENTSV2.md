@@ -161,6 +161,20 @@ acceleration consumption afterward. All three pickup checks pass on the focused 
 is clean. No additional gameplay changes followed the successful production build/browser checks.
 Confidence ≥95% within the documented route contract. The updated preview remains on port 4173.
 
+## 9. Harder opening, surface obstacles, held suction and main menu — IN PROGRESS
+
+- [ ] Increase opening difficulty by 50% while preserving validated maneuver limits.
+- [ ] Place obstacles on floors, ceilings and both walls inside the world-generation validator.
+- [ ] Replace suction toggle with hold E throughout controls, physics and recorded route validation.
+- [ ] Add a main menu with a spinning 3D roadster; Space or clicking the car starts the run.
+- [ ] Verify these features together before advancing to release checks (≥95% confidence gate).
+
+## 10. Menu and obstacle update verification — NOT STARTED
+
+- [ ] Run regression tests, production build and independent review.
+- [ ] Verify the menu, hold/release suction and generated hazards in the browser.
+- [ ] Update documentation and refresh the playable preview.
+
 ## Evidence / issues
 
 - Baseline environment had no `npm` on PATH; resolved with the verified local Node 22 distribution.

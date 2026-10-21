@@ -223,7 +223,7 @@ export class CarModel {
     }
   }
 
-  /** active: suction toggled on. attached: currently stuck to a surface. */
+  /** active: held suction is powered. attached: currently stuck to a surface. */
   setSuction(active: boolean, attached: boolean) {
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 8);
     this.suctionMat.opacity = active ? (attached ? 0.85 : 0.25 + 0.35 * pulse) : 0;

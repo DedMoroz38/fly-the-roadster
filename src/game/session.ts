@@ -116,7 +116,7 @@ export interface SessionSnapshot {
  * restart. The browser `Game` drives it; tests drive it directly.
  */
 export class GameSession {
-  state: SessionState = 'running';
+  state: SessionState = 'ready';
   sim: Simulation;
   /** Furthest forward distance reached this attempt (the score). */
   score = 0;
@@ -133,6 +133,13 @@ export class GameSession {
     private createSim: (seed: number) => Simulation,
   ) {
     this.sim = createSim(seed);
+  }
+
+  /** Only the main menu's explicit start action begins the initial attempt. */
+  startRun() {
+    if (this.state !== 'ready') return;
+    this.state = 'running';
+    this.helpOpen = false;
   }
 
   /** Called once per fixed step with the sampled controls. */
@@ -157,6 +164,7 @@ export class GameSession {
   }
 
   toggleHelp() {
+    if (this.state === 'ready') return;
     this.helpOpen = !this.helpOpen;
     if (this.helpOpen && this.state === 'running') this.state = 'paused';
     else if (!this.helpOpen && this.state === 'paused') this.state = 'running';
@@ -164,6 +172,7 @@ export class GameSession {
 
   /** Full reset: new physics world, regenerated course (same seed), full fuel, score 0. */
   restart() {
+    if (this.state === 'ready') return;
     this.best = Math.max(this.best, this.score);
     this.sim.dispose();
     this.sim = this.createSim(this.seed);

@@ -11,22 +11,44 @@ beforeAll(async () => {
   await initPhysics();
 });
 
-const staticSession = (slabs: Omit<Slab, 'id'>[], spawn?: { x: number; y: number; z: number }) =>
-  new GameSession(1, () => new Simulation({ spawn, createLevel: (w) => new StaticLevel(w, slabs) }));
+const staticSession = (slabs: Omit<Slab, 'id'>[], spawn?: { x: number; y: number; z: number }) => {
+  const session = new GameSession(1, () => new Simulation({ spawn, createLevel: (w) => new StaticLevel(w, slabs) }));
+  session.startRun();
+  return session;
+};
 
 function steps(s: GameSession, seconds: number, c = {}) {
   for (let i = 0; i < Math.round(seconds * 60); i++) s.step(controls(c));
 }
 
 describe('GameSession flow', () => {
-  it('starts moving automatically with no movement key or initial help obstruction', () => {
-    const s = staticSession([{ surface: 'floor', d0: -20, d1: 500 }]);
+  it('waits at the main menu until explicitly started, then cruises automatically', () => {
+    const s = new GameSession(1, () => new Simulation({ createLevel: w =>
+      new StaticLevel(w, [{ surface: 'floor', d0: -20, d1: 500 }]) }));
+    expect(s.state).toBe('ready');
+    const pose = s.sim.pose();
+    const world = s.sim.world;
+    steps(s, 3, { accelerate: true, thrust: true, rollRight: true, suction: true });
+    s.togglePause();
+    s.toggleHelp();
+    s.restart();
+    expect(s.state).toBe('ready');
+    expect(s.sim.world).toBe(world);
+    expect(s.sim.time).toBe(0);
+    expect(s.score).toBe(0);
+    expect(s.sim.fuel.fraction).toBe(1);
+    expect(s.sim.pose()).toEqual(pose);
+    s.startRun();
     expect(s.state).toBe('running');
     expect(s.helpOpen).toBe(false);
     steps(s, 2);
     expect(s.sim.time).toBeGreaterThan(1.9);
     expect(s.score).toBeGreaterThan(30);
     expect(s.sim.vehicle.forwardSpeed).toBeGreaterThan(20);
+    const time = s.sim.time;
+    s.startRun();
+    expect(s.sim.time).toBe(time); // repeated clicks cannot reset an active run
+    s.sim.dispose();
   });
 
   it('tracks furthest forward distance even when an external collision moves the body back', () => {
@@ -102,6 +124,7 @@ describe('GameSession flow', () => {
 
   it('restart resets vehicle, physics, course, fuel and score, keeping the seed', async () => {
     const s = new GameSession(77, (seed) => new Simulation({ createLevel: (w) => new Course(w, seed) }));
+    s.startRun();
     const firstSlabs = [...s.sim.level.slabs.active.values()].map((x) => [x.surface, x.d0, x.d1]);
     steps(s, 2, { accelerate: true });
     steps(s, 0.3, { accelerate: true, thrust: true });
@@ -188,8 +211,8 @@ describe('roof landings', () => {
     ], { x: 0, y: 8.5, z: -10 });
     try {
       setRoll(s.sim, Math.PI);
-      s.step(controls({ toggleSuction: true }));
-      steps(s, 4);
+      s.step(controls({ suction: true }));
+      steps(s, 4, { suction: true });
       expect(s.state).toBe('running');
       expect(s.sim.vehicle.mode).toBe('attached');
       expect(s.sim.vehicle.supportSurface).toBe('ceiling');

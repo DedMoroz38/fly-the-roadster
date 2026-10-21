@@ -121,7 +121,7 @@ describe('debug telemetry', () => {
     const session = new GameSession(123, () => sim);
     const debug: CourseDebugInfo = {
       difficulty: 0.45, chunkSeed: 789, chunkId: 3, kind: 'ceiling', validated: true,
-      minFuel: 3.8, maxHeat: 15, phase: 'launch toward ceiling', nextAction: 'Roll 180°, then E for suction', frontier: 900,
+      minFuel: 3.8, maxHeat: 15, phase: 'launch toward ceiling', nextAction: 'Roll 180°, then hold E for suction', frontier: 900,
     };
     Object.assign(sim.level, { debugInfo: () => debug, terrainStatus: 'Preparing road…' });
     sim.vehicle.body.setLinvel({ x: 3, y: 4, z: -12 }, true);

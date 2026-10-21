@@ -16,7 +16,9 @@ npm run build      # typecheck + production build
 ```
 
 Tested with Node 22.23.4. The long-distance generation test can take about a minute.
-Gameplay starts after the initial terrain buffer is validated in a Web Worker.
+After the initial terrain buffer is validated in a Web Worker, the main menu displays a spinning
+3D roadster. Press Space or click the car to start. The world stays stopped until then; the start
+keypress is consumed so it cannot also fire the lift thrusters.
 
 ## Controls
 
@@ -26,7 +28,7 @@ Gameplay starts after the initial terrain buffer is validated in a Web Worker.
 | Space | Main thrusters (push away from the wheels) |
 | ← / → | Roll torque on every surface and in the air |
 | A / D | Steer on a surface |
-| E | Toggle suction |
+| Hold E | Engage suction; release to let go and cool |
 | R | Restart (same seed) |
 | Esc | Pause |
 | H | Help overlay |
@@ -36,7 +38,7 @@ Cruise is 24 m/s; acceleration approaches 32 m/s. There are no braking or revers
 Forces and torques drive the dynamic body, including roll against ground contact. Pitch and yaw
 are locked. A/D steer independently on surfaces; the arrows fire the visible roll-thruster pairs.
 
-Floors support the car by gravity. Walls and ceilings need suction with the wheels facing them.
+Floors support the car by gravity. Walls and ceilings need E held for suction with the wheels facing them.
 Attraction requires a surface within 2.5 m; attachment requires a gap of at most 0.4 m and alignment.
 Acceleration, lift, roll and suction share a five-unit tank. W / ↑ consumes 0.4 units/s;
 automatic cruise remains free, including with an empty tank. Green cells refill it.
@@ -44,7 +46,8 @@ Landing on the roof ends the run. Airborne barrel rolls and wheels-first ceiling
 
 Floor suction heats at 24 units/s, uses extra fuel and adds drag. Wall/ceiling suction heats at
 1.5 units/s. The HUD warns at 75, locks suction off at 100, and allows reactivation below 35.
-Switching it off cools at 18 units/s. Wall and ceiling traversal remain practical for extended periods.
+Releasing E cools at 18 units/s. If E stays held through an overheat, suction resumes only after heat
+drops below 35 and fuel is available. Wall and ceiling traversal remain practical for extended periods.
 
 ## Terrain and validation
 
@@ -55,13 +58,16 @@ validated recovery-road fallback. No controller drives the player's car; validat
 worker and tests.
 
 Supported procedural families are normal road, short flight gap, ceiling crossing, either wall,
-multiple surface transitions, and extended surface-free flight. Seeded obstacles and disconnected
-surfaces are added outside a protected route, then the decorated result is validated again.
+multiple surface transitions, and extended surface-free flight. Seeded obstacles mount on floors,
+ceilings and both walls, including the opening road. Their physical colliders are part of world
+generation: placement respects the intended route and reaction margins, then the complete decorated
+chunk is replayed and validated again. Unreachable additions are rejected.
 Logarithmic difficulty changes bounded gaps, challenge frequency and combinations. Regular recovery
 roads provide cooling and reachable fuel cells.
 The default opening road is 160–180 m and leads into two requested challenge chunks. On tested
 seeds 1/42/233, the first maneuver arrives after roughly 11–13 seconds at cruise speed. Difficulty
-increases faster over the first kilometre; later recovery sections keep their full duration.
+values over the first kilometre are now 50% higher than the previous tuning (about 28% at 500 m and
+42% at 1 km). The curve continues increasing afterward; later recovery sections keep their full duration.
 
 The validation contract includes a minimum 2 s preparation interval, ±0.15 s action/suction timing
 checks, and entry speeds of 24/28/32 m/s. Timing variants allow ordinary steering corrections on
@@ -85,8 +91,9 @@ Tune movement/resources in `src/game/config.ts`, maneuver limits in
 `src/game/course/plannerConfig.ts`, progression/streaming in `generatorConfig.ts`, and optional
 geometry in `decorator.ts`.
 
-Regression coverage includes acceleration fuel sharing/exhaustion, roof landing failure, faster
-opening pacing, all challenge families at maximum configured difficulty, impossible
+Regression coverage includes the explicit menu start, held suction/release, acceleration fuel
+sharing/exhaustion, roof landing failure, faster opening pacing, all-surface obstacle placement,
+all challenge families at maximum configured difficulty, impossible
 candidate rejection, three continuous mixed 6 km routes, 50 km of bounded generation, and a 100 km
 continuous normal-road replay. Origin tests compare physics at 0, 50 km and 10 million logical metres;
 render tests preserve fractional geometry at 1 billion metres. These are engineering checks, not an
