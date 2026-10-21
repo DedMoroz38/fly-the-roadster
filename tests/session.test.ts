@@ -3,7 +3,7 @@ import { initPhysics, Simulation } from '../src/game/simulation';
 import { StaticLevel } from '../src/game/physics/level';
 import { Course } from '../src/game/course/course';
 import { FailureMonitor, GameSession } from '../src/game/session';
-import { controls } from './helpers';
+import { controls, setRoll } from './helpers';
 import { CONFIG } from '../src/game/config';
 import type { Slab } from '../src/game/surfaces';
 
@@ -19,27 +19,27 @@ function steps(s: GameSession, seconds: number, c = {}) {
 }
 
 describe('GameSession flow', () => {
-  it('starts in ready state with help open; begins on the first gameplay input', () => {
+  it('starts moving automatically with no movement key or initial help obstruction', () => {
     const s = staticSession([{ surface: 'floor', d0: -20, d1: 500 }]);
-    expect(s.state).toBe('ready');
-    expect(s.helpOpen).toBe(true);
-    steps(s, 1);
-    expect(s.sim.time).toBe(0);
-    steps(s, 1, { accelerate: true });
     expect(s.state).toBe('running');
     expect(s.helpOpen).toBe(false);
-    expect(s.score).toBeGreaterThan(10);
+    steps(s, 2);
+    expect(s.sim.time).toBeGreaterThan(1.9);
+    expect(s.score).toBeGreaterThan(30);
+    expect(s.sim.vehicle.forwardSpeed).toBeGreaterThan(20);
   });
 
-  it('tracks forward distance as the score (max reached, not current)', () => {
+  it('tracks furthest forward distance even when an external collision moves the body back', () => {
     const s = staticSession([{ surface: 'floor', d0: -50, d1: 500 }]);
     steps(s, 2, { accelerate: true });
-    expect(s.score).toBeCloseTo(s.sim.distance, 3);
-    steps(s, 1, { brake: true }); // comes to a stop
-    const sc = s.score;
-    steps(s, 2, { brake: true }); // reverses
-    expect(s.sim.distance).toBeLessThan(sc - 5);
-    expect(s.score).toBeCloseTo(sc, 3);
+    const score = s.score;
+    const p = s.sim.vehicle.position;
+    s.sim.vehicle.body.setTranslation({ ...p, z: p.z + 10 }, true);
+    s.sim.vehicle.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    // Reset the monitor by using a small external displacement without a speed drop.
+    s.sim.vehicle.forwardSpeed = 0;
+    steps(s, 1 / 60);
+    expect(s.score).toBe(score);
   });
 
   it('pause freezes the simulation; resume continues', () => {
@@ -85,7 +85,7 @@ describe('GameSession flow', () => {
     expect(s.failReason).toBe('crashed');
   });
 
-  it('driving, landing, braking and attaching to surfaces are not crashes', () => {
+  it('driving, landing, cruising and attaching to surfaces are not crashes', () => {
     const s = staticSession(
       [
         { surface: 'floor', d0: -20, d1: 2000 },
@@ -93,7 +93,7 @@ describe('GameSession flow', () => {
       ],
     );
     steps(s, 2, { accelerate: true });
-    steps(s, 0.5, { brake: true }); // hard braking
+    steps(s, 0.5); // ease toward cruise
     steps(s, 1.5, { accelerate: true });
     steps(s, 0.6, { accelerate: true, thrust: true });
     steps(s, 1.5, { accelerate: true }); // fall back down and land
@@ -106,6 +106,10 @@ describe('GameSession flow', () => {
     steps(s, 2, { accelerate: true });
     steps(s, 0.3, { accelerate: true, thrust: true });
     expect(s.sim.fuel.fraction).toBeLessThan(1);
+    s.sim.vehicle.suctionHeat = 100;
+    s.sim.vehicle.suctionOverheated = true;
+    expect(s.snapshot().suctionHeat).toBe(100);
+    expect(s.snapshot().suctionOverheated).toBe(true);
     expect(s.score).toBeGreaterThan(20);
     const oldWorld = s.sim.world;
     s.restart();
@@ -116,6 +120,8 @@ describe('GameSession flow', () => {
     expect(s.sim.distance).toBeCloseTo(10, 1);
     expect(s.sim.vehicle.position.y).toBeLessThan(0.5);
     expect(s.sim.vehicle.suctionOn).toBe(false);
+    expect(s.snapshot().suctionHeat).toBe(0);
+    expect(s.snapshot().suctionOverheated).toBe(false);
     expect(s.attempt).toBe(1);
     expect(s.failReason).toBeNull();
     expect([...s.sim.level.slabs.active.values()].map((x) => [x.surface, x.d0, x.d1])).toEqual(firstSlabs);
@@ -133,12 +139,81 @@ describe('GameSession flow', () => {
   });
 });
 
+describe('roof landings', () => {
+  it.each([Math.PI, -Math.PI, Math.PI * 5 / 6, -Math.PI * 5 / 6])(
+    'ends the run on actual roof contact at roll %s, including tilted landings', roll => {
+      const s = staticSession([{ surface: 'floor', d0: -20, d1: 500 }], { x: 0, y: 3, z: -10 });
+      try {
+        setRoll(s.sim, roll);
+        steps(s, 0.2);
+        expect(s.state).toBe('running'); // inverted in mid-air is not a crash
+        expect(s.sim.vehicle.position.y).toBeGreaterThan(2);
+        steps(s, 1);
+        expect(s.state).toBe('gameover');
+        expect(s.failReason).toBe('flipped');
+        expect(s.sim.vehicle.position.y).toBeLessThan(1);
+        const time = s.sim.time;
+        const pose = s.sim.vehicle.position;
+        steps(s, 1, { rollRight: true, thrust: true });
+        expect(s.sim.time).toBe(time);
+        expect(s.sim.vehicle.position).toEqual(pose);
+        s.restart();
+        expect(s.failReason).toBeNull();
+        steps(s, 1);
+        expect(s.state).toBe('running');
+        expect(s.sim.vehicle.mode).toBe('grounded');
+      } finally { s.sim.dispose(); }
+    },
+  );
+
+  it('allows a full airborne barrel roll without any contact', () => {
+    const s = staticSession([], { x: 0, y: 8, z: -10 });
+    try {
+      s.sim.vehicle.body.setLinvel({ x: 0, y: 15, z: -24 }, true);
+      let inverted = false;
+      for (let i = 0; i < 90; i++) {
+        s.step(controls({ rollRight: true }));
+        inverted ||= Math.cos(s.sim.vehicle.roll) < -0.9;
+        expect(s.state).toBe('running');
+      }
+      expect(inverted).toBe(true);
+      expect(Math.cos(s.sim.vehicle.roll)).toBeGreaterThan(0.5);
+    } finally { s.sim.dispose(); }
+  });
+
+  it('allows upside-down ceiling attachment and travel', () => {
+    const s = staticSession([
+      { surface: 'floor', d0: -20, d1: 500 },
+      { surface: 'ceiling', d0: -20, d1: 500 },
+    ], { x: 0, y: 8.5, z: -10 });
+    try {
+      setRoll(s.sim, Math.PI);
+      s.step(controls({ toggleSuction: true }));
+      steps(s, 4);
+      expect(s.state).toBe('running');
+      expect(s.sim.vehicle.mode).toBe('attached');
+      expect(s.sim.vehicle.supportSurface).toBe('ceiling');
+      expect(s.score).toBeGreaterThan(80);
+    } finally { s.sim.dispose(); }
+  });
+
+  it.each([-Math.PI / 2, Math.PI / 2])('does not call a side landing a roof crash (%s)', roll => {
+    const s = staticSession([{ surface: 'floor', d0: -20, d1: 500 }], { x: 0, y: 1.2, z: -10 });
+    try {
+      setRoll(s.sim, roll);
+      steps(s, 1);
+      expect(s.state).toBe('running');
+      expect(s.sim.vehicle.position.y).toBeLessThan(1);
+    } finally { s.sim.dispose(); }
+  });
+});
+
 describe('FailureMonitor', () => {
   const fake = (o: { x?: number; y?: number; d: number; fwd: number; mode?: string }) =>
     ({
       dt: 1 / 60,
       distance: o.d,
-      vehicle: { position: { x: o.x ?? 0, y: o.y ?? 5, z: -o.d }, forwardSpeed: o.fwd, mode: o.mode ?? 'airborne' },
+      vehicle: { position: { x: o.x ?? 0, y: o.y ?? 5, z: -o.d }, roll: 0, forwardSpeed: o.fwd, mode: o.mode ?? 'airborne' },
     }) as unknown as Simulation;
 
   it('flags being stranded airborne with no progress', () => {

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Game } from '../game/Game';
 import { FAIL_TEXT, SessionSnapshot } from '../game/session';
+import { CONFIG } from '../game/config';
 
 const SUCTION_LABEL: Record<string, string> = {
   off: 'OFF',
+  overheated: 'OVERHEATED · COOLING',
+  'no-energy': 'UNAVAILABLE · NO FUEL',
   searching: 'ON · NO SURFACE',
   attracting: 'PULLING',
   attached: 'ATTACHED',
@@ -16,17 +19,50 @@ export function useSnapshot(game: Game | null): SessionSnapshot | null {
 }
 
 const CONTROLS: [string, string][] = [
-  ['W', 'Accelerate'],
-  ['S', 'Brake / reverse'],
+  ['W / ↑', 'Accelerate (uses fuel) · release to cruise'],
   ['Space', 'Main thrusters (push away from wheels)'],
-  ['↑', 'Forward thruster (boost)'],
-  ['← / →', 'Barrel roll in the air · steer on a surface'],
+  ['← / →', 'Roll left / right (also works on the floor)'],
   ['A / D', 'Steer on a surface'],
   ['E', 'Toggle suction'],
   ['R', 'Restart'],
   ['Esc', 'Pause'],
   ['H', 'Show / hide this help'],
+  ['F3', 'Route and physics debug view'],
 ];
+
+const CHALLENGE_LABEL: Record<string, string> = {
+  normal: 'Recovery road', gap: 'Flight gap', ceiling: 'Ceiling crossing',
+  'wall-left': 'Left wall crossing', 'wall-right': 'Right wall crossing',
+  multiple: 'Surface transitions', flight: 'Extended flight',
+};
+
+/** Detailed telemetry is opt-in; the upcoming maneuver remains visible in normal play. */
+export function DebugPanel({ snapshot: s }: { snapshot: SessionSnapshot }) {
+  if (!s.debugEnabled) return null;
+  const d = s.debug;
+  return (
+    <aside className="debug-panel" aria-label="Physics and route debug">
+      <div className="debug-title">PHYSICS + ROUTE <span>F3 to hide</span></div>
+      <dl>
+        <dt>Speed / forward</dt><dd>{s.totalSpeed.toFixed(2)} / {s.forwardVelocity.toFixed(2)} m/s</dd>
+        <dt>Fuel</dt><dd>{(s.fuel * CONFIG.fuel.capacity).toFixed(2)} / {CONFIG.fuel.capacity.toFixed(1)}</dd>
+        <dt>Suction / heat</dt><dd>{s.suctionOn ? 'ON' : 'OFF'} · {s.suctionHeat.toFixed(1)} / {CONFIG.suction.criticalHeat}</dd>
+        <dt>Attachment</dt><dd>{s.surface ?? 'none'} · {s.mode}</dd>
+        {d && <>
+          <dt>Difficulty</dt><dd>{Math.round(d.difficulty * 100)}%</dd>
+          <dt>Chunk / seed</dt><dd>{d.chunkId} / {d.chunkSeed}</dd>
+          <dt>Challenge</dt><dd>{d.kind}</dd>
+          <dt>Route validation</dt><dd className={d.validated ? 'debug-valid' : 'debug-invalid'}>{d.validated ? 'PASSED' : 'REJECTED'}</dd>
+          <dt>Route fuel / heat</dt><dd>min {d.minFuel.toFixed(2)} · max {d.maxHeat.toFixed(1)}</dd>
+          <dt>Current phase</dt><dd>{d.phase}</dd>
+          <dt>Generated ahead</dt><dd>{Math.max(0, Math.round(d.frontier - s.distance))} m</dd>
+        </>}
+      </dl>
+      {d && <div className="debug-next">Next: {d.nextAction}</div>}
+      <div className="debug-legend"><span /> Validated movement route</div>
+    </aside>
+  );
+}
 
 function HelpPanel({ ready }: { ready: boolean }) {
   return (
@@ -45,10 +81,13 @@ function HelpPanel({ ready }: { ready: boolean }) {
       </table>
       <ul className="tips">
         <li>Floors hold you by gravity. Walls and ceilings need <b>suction</b> (E) with the wheels facing them.</li>
-        <li>Thrusters push away from the wheels — roll first to aim them. Fuel lasts about 5 s.</li>
-        <li>Grab the green <span className="fuel-word">fuel cells</span> to refill.</li>
+        <li>Lift thrusters push away from the wheels — roll first to aim them. A full tank provides 5 s of lift.</li>
+        <li>Grab the green <span className="fuel-word">fuel cells</span> to refill. Acceleration, lift, roll and suction share fuel.</li>
+        <li>Switch suction off on the floor: it heats quickly and adds drag. After overheating, cool below {Math.round(CONFIG.suction.recoveryHeat / CONFIG.suction.criticalHeat * 100)}% and press E again.</li>
+        <li>Cruising is automatic and uses no fuel. Release W / ↑ to ease back to cruise speed.</li>
+        <li>Landing on the roof ends the run. Roll upright before returning to the road.</li>
       </ul>
-      <p className="cta">{ready ? 'Press W to start' : 'Press H or Esc to resume'}</p>
+      <p className="cta">{ready ? 'Cruise starts automatically' : 'Press H or Esc to resume'}</p>
     </div>
   );
 }
@@ -65,11 +104,14 @@ export function Hud({ game }: { game: Game | null }) {
       lastRefuels.current = s.refuels;
       return () => clearTimeout(t);
     }
+    setFlash(false);
     lastRefuels.current = s.refuels;
   }, [s?.refuels]);
   if (!s) return <div className="hud"><div className="loading">Loading…</div></div>;
 
   const fuelPct = Math.round(s.fuel * 100);
+  const heatPct = Math.round(s.suctionHeat / CONFIG.suction.criticalHeat * 100);
+  const heatWarning = s.suctionHeat >= CONFIG.suction.warningHeat;
   return (
     <div className={`hud ${flash ? 'refuel-flash' : ''}`}>
       <div className="hud-top">
@@ -85,11 +127,26 @@ export function Hud({ game }: { game: Game | null }) {
         </div>
       </div>
 
+      {s.debug && <div className="route-cue">
+        <span className="label">{CHALLENGE_LABEL[s.debug.kind] ?? s.debug.kind}</span>
+        <strong>{s.debug.nextAction || s.debug.phase}</strong>
+      </div>}
+      {s.terrainStatus && <div className="terrain-status" role="status">{s.terrainStatus}</div>}
+      <DebugPanel snapshot={s} />
+
       <div className="hud-bottom">
         <div className={`fuel ${s.fuelEmpty ? 'empty' : fuelPct < 25 ? 'low' : ''}`}>
           <span className="label">FUEL</span>
           <div className="bar"><div className="fill" style={{ width: `${fuelPct}%` }} /></div>
           <span className="pct">{s.fuelEmpty ? 'EMPTY' : `${fuelPct}%`}</span>
+        </div>
+        <div className={`heat ${s.suctionOverheated ? 'locked' : heatWarning ? 'warning' : ''}`}>
+          <span className="label">SUCTION HEAT</span>
+          <div className="bar" role="progressbar" aria-label="Suction heat" aria-valuenow={heatPct} aria-valuemin={0} aria-valuemax={100}>
+            <div className="fill" style={{ width: `${heatPct}%` }} />
+          </div>
+          <span className="pct">{heatPct}%</span>
+          <span className="heat-notice" role="status">{s.suctionOverheated ? 'LOCKED · COOLING' : heatWarning ? 'HEAT CRITICAL' : ''}</span>
         </div>
         <div className={`suction suction-${s.suctionState}`}>
           <span className="label">SUCTION</span>
@@ -99,6 +156,7 @@ export function Hud({ game }: { game: Game | null }) {
       </div>
 
       <div className="seed">seed {s.seed}</div>
+      <div className="control-hint">AUTO CRUISE · Space lift · ← → roll · E suction · H help · F3 debug</div>
 
       {s.helpOpen && <div className="overlay"><HelpPanel ready={s.state === 'ready'} /></div>}
       {s.state === 'paused' && !s.helpOpen && (

@@ -1,17 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { makeSim, run } from './helpers';
+import { makeSim, run, controls } from './helpers';
 import { CONFIG } from '../src/game/config';
 
 const longFloor = [{ surface: 'floor' as const, d0: -20, d1: 2000 }];
 
 describe('driving', () => {
-  it('rests on the floor without input', async () => {
+  it('moves forward automatically and settles at cruise without input', async () => {
     const sim = await makeSim(longFloor);
     run(sim, 1);
     expect(sim.vehicle.mode).toBe('grounded');
     expect(sim.vehicle.position.y).toBeGreaterThan(0.2);
     expect(sim.vehicle.position.y).toBeLessThan(0.6);
-    expect(Math.abs(sim.distance - 10)).toBeLessThan(0.1);
+    expect(sim.distance).toBeGreaterThan(18);
+    run(sim, 3);
+    expect(sim.vehicle.forwardSpeed).toBeCloseTo(CONFIG.car.cruiseSpeed, 1);
   });
 
   it('accelerates forward with W up to max speed', async () => {
@@ -29,23 +31,47 @@ describe('driving', () => {
     expect(Math.abs(sim.vehicle.position.x)).toBeLessThan(0.05);
   });
 
-  it('brakes to a stop and then reverses with S', async () => {
-    const sim = await makeSim(longFloor);
-    run(sim, 2, { accelerate: true });
-    run(sim, 0.4, { brake: true });
-    expect(sim.vehicle.forwardSpeed).toBeLessThan(25);
-    run(sim, 2, { brake: true });
-    expect(sim.vehicle.forwardSpeed).toBeLessThan(-5);
-    expect(sim.vehicle.forwardSpeed).toBeGreaterThanOrEqual(-CONFIG.car.maxReverseSpeed - 0.01);
+  it('queues engine and lift forces without changing motion before the physics step', async () => {
+    const sim = await makeSim([], { x: 0, y: 500, z: -10 });
+    const beforePosition = { ...sim.vehicle.position };
+    const beforeVelocity = { ...sim.vehicle.body.linvel() };
+    const beforeRotation = { ...sim.vehicle.body.rotation() };
+    sim.vehicle.applyControls(controls({ accelerate: true, thrust: true, rollLeft: true }), sim.dt, sim.fuel);
+    expect(sim.vehicle.position).toEqual(beforePosition);
+    expect(sim.vehicle.body.linvel()).toEqual(beforeVelocity);
+    expect(sim.vehicle.body.rotation()).toEqual(beforeRotation);
+    expect(sim.vehicle.body.angvel().z).toBe(0);
+    sim.world.step();
+    expect(sim.vehicle.body.linvel().z).toBeLessThan(0);
+    expect(sim.vehicle.body.linvel().y).toBeGreaterThan(0);
+    expect(sim.vehicle.body.angvel().z).toBeGreaterThan(0);
   });
 
-  it('coasts down when no input', async () => {
+  it('uses bounded forward force and preserves collision or impulse momentum', async () => {
+    const sim = await makeSim(longFloor);
+    run(sim, 1 / 60);
+    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(0);
+    expect(sim.vehicle.forwardSpeed).toBeLessThanOrEqual(CONFIG.car.acceleration / 60 + 0.01);
+    sim.vehicle.body.setLinvel({ x: 0, y: 0, z: -45 }, true);
+    run(sim, 1 / 60, { accelerate: true });
+    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(44.8);
+    sim.vehicle.body.setLinvel({ x: 0, y: 0, z: 3 }, true);
+    run(sim, 1 / 60);
+    // A collision can briefly push backward; the engine recovers without erasing it.
+    expect(sim.vehicle.forwardSpeed).toBeLessThan(-2.5);
+    run(sim, 2);
+    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(20);
+  });
+
+  it('returns toward cruise after releasing acceleration, and never coasts to a stop', async () => {
     const sim = await makeSim(longFloor);
     run(sim, 2, { accelerate: true });
     const v = sim.vehicle.forwardSpeed;
     run(sim, 1);
     expect(sim.vehicle.forwardSpeed).toBeLessThan(v);
     expect(sim.vehicle.forwardSpeed).toBeGreaterThan(v - 5);
+    run(sim, 8);
+    expect(sim.vehicle.forwardSpeed).toBeCloseTo(CONFIG.car.cruiseSpeed, 1);
   });
 
   it('steers laterally with A/D on the floor', async () => {
@@ -66,10 +92,10 @@ describe('driving', () => {
     expect(sim.vehicle.mode).toBe('airborne');
     expect(sim.vehicle.forwardSpeed).toBeGreaterThan(25);
     expect(sim.vehicle.position.y).toBeLessThan(0);
-    // No drive while airborne: braking does nothing to forward speed.
     const v = sim.vehicle.forwardSpeed;
-    run(sim, 0.3, { brake: true });
-    expect(sim.vehicle.forwardSpeed).toBeCloseTo(v, 1);
+    run(sim, 0.3);
+    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(v - 1);
+    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(CONFIG.car.cruiseSpeed);
   });
 
   it('does not drive on a wall without suction (falls off it)', async () => {

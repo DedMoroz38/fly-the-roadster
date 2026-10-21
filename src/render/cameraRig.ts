@@ -40,6 +40,14 @@ export class CameraRig {
     this.initialized = false;
   }
 
+  /** Translate cached interpolation state together with a floating-origin shift. */
+  rebase(delta: number) {
+    if (!this.initialized) return;
+    this.pos.z += delta;
+    this.look.z += delta;
+    this.camera.position.z += delta;
+  }
+
   update(car: { x: number; y: number; z: number }, dt: number) {
     const g = cameraGoal(car);
     if (!this.initialized) {

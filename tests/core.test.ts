@@ -99,6 +99,17 @@ describe('FuelTank', () => {
 });
 
 describe('InputManager', () => {
+  it('ignores brake/reverse keys and keeps acceleration aliases independent', () => {
+    const im = new InputManager();
+    expect(im.keyDown('KeyS')).toBe(false);
+    expect(im.keyDown('ArrowDown')).toBe(false);
+    im.keyDown('KeyW');
+    im.keyDown('ArrowUp');
+    im.keyUp('KeyW');
+    expect(im.sample().accelerate).toBe(true);
+    im.keyUp('ArrowUp');
+    expect(im.sample().accelerate).toBe(false);
+  });
   it('supports simultaneous held keys', () => {
     const im = new InputManager();
     im.keyDown('KeyW');
@@ -109,15 +120,44 @@ describe('InputManager', () => {
     im.keyUp('Space');
     expect(im.sample().thrust).toBe(false);
   });
-  it('suction toggle is edge-triggered and ignores auto-repeat', () => {
+  it('suction remains held across snapshots and repeat events until release', () => {
     const im = new InputManager();
     im.keyDown('KeyE');
-    expect(im.sample().toggleSuction).toBe(true);
+    expect(im.sample().suction).toBe(true);
+    expect(im.sample().suction).toBe(true);
     im.keyDown('KeyE', true);
-    expect(im.sample().toggleSuction).toBe(false);
+    expect(im.sample().suction).toBe(true);
     im.keyUp('KeyE');
+    expect(im.sample().suction).toBe(false);
     im.keyDown('KeyE');
-    expect(im.sample().toggleSuction).toBe(true);
+    expect(im.sample().suction).toBe(true);
+  });
+  it('releases held suction on window blur', () => {
+    const im = new InputManager();
+    const target = new EventTarget();
+    const detach = im.attach(target as unknown as Window);
+    im.keyDown('KeyE');
+    expect(im.sample().suction).toBe(true);
+    target.dispatchEvent(new Event('blur'));
+    expect(im.sample().suction).toBe(false);
+    detach();
+  });
+  it('blocks held start/menu keys until release, including repeat keydown', () => {
+    const im = new InputManager();
+    for (const key of ['Space', 'KeyW', 'KeyE']) im.keyDown(key);
+    im.clearUntilRelease();
+    for (const key of ['Space', 'KeyW', 'KeyE']) im.keyDown(key, true);
+    expect(im.sample().thrust).toBe(false);
+    expect(im.sample().accelerate).toBe(false);
+    expect(im.sample().suction).toBe(false);
+    expect(im.consumePress('thrust')).toBe(false);
+    for (const key of ['Space', 'KeyW', 'KeyE']) {
+      im.keyUp(key);
+      im.keyDown(key);
+    }
+    expect(im.sample().thrust).toBe(true);
+    expect(im.sample().accelerate).toBe(true);
+    expect(im.sample().suction).toBe(true);
   });
   it('reports which keys it handles (for preventDefault)', () => {
     const im = new InputManager();
@@ -127,7 +167,9 @@ describe('InputManager', () => {
   it('clear releases held keys', () => {
     const im = new InputManager();
     im.keyDown('KeyW');
+    im.keyDown('KeyE');
     im.clear();
     expect(im.sample().accelerate).toBe(false);
+    expect(im.sample().suction).toBe(false);
   });
 });

@@ -1,223 +1,234 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import RAPIER from '@dimforge/rapier3d-compat';
-import {
-  CHUNK, CourseGenerator, difficultyAt, gapLimits, transitionFuelCost,
-} from '../src/game/course/generator';
 import { Course, STREAM } from '../src/game/course/course';
+import { ChunkSource, SynchronousChunkSource } from '../src/game/course/chunkSource';
+import { GeneratedChunk, ReachableCourseGenerator } from '../src/game/course/routeGenerator';
+import { PLANNER_CONFIG } from '../src/game/course/plannerConfig';
 import { initPhysics } from '../src/game/simulation';
-import { SURFACES } from '../src/game/surfaces';
 import { CONFIG } from '../src/game/config';
-import { makeSim, run } from './helpers';
+import { controls, makeSim, run } from './helpers';
 
-const KM = 1000;
+beforeAll(initPhysics);
 
-function gen(seed: number, metres = 6 * KM) {
-  const g = new CourseGenerator(seed);
-  g.generateUntil(metres / CHUNK);
-  return g;
+/** Delivery is deliberately controlled by the test, as with a delayed worker message. */
+class QueuedSource implements ChunkSource {
+  frontier = 0;
+  error: string | null = null;
+  requests: { until: number; forgetBefore: number }[] = [];
+  pending: GeneratedChunk[] = [];
+  disposed = false;
+  request(until: number, forgetBefore: number) { this.requests.push({ until, forgetBefore }); }
+  drain() { return this.pending.splice(0); }
+  deliver(chunk: GeneratedChunk) { this.pending.push(chunk); this.frontier = chunk.d1; }
+  dispose() { this.disposed = true; this.pending.length = 0; }
 }
 
-describe('CourseGenerator', () => {
-  it('is deterministic per seed and differs across seeds', () => {
-    const a = gen(123), b = gen(123), c = gen(124);
-    expect(a.route).toEqual(b.route);
-    expect(a.pickups).toEqual(b.pickups);
-    for (const s of SURFACES) expect([...a.lanes[s]].sort()).toEqual([...b.lanes[s]].sort());
-    expect(c.route).not.toEqual(a.route);
-  });
+const withoutId = <T extends { id?: number }>({ id: _id, ...geometry }: T) => geometry;
+const makeWorld = () => new RAPIER.World({ x: 0, y: -CONFIG.gravity, z: 0 });
 
-  it('starts with the spec scenario: floor, then ceiling, then a side wall', () => {
-    const g = gen(1, KM);
-    expect(g.route[0].surface).toBe('floor');
-    expect(g.route[0].start * CHUNK).toBeLessThanOrEqual(-10); // car spawns on it at d=10
-    expect(g.route[1].surface).toBe('ceiling');
-    expect(['left', 'right']).toContain(g.route[2].surface);
-    // ceiling begins before the floor ends (reachable), wall begins before the ceiling ends
-    expect(g.route[1].start).toBeLessThan(g.route[0].end);
-    expect(g.route[2].start).toBeLessThan(g.route[1].end);
-    // Section 1 is plain floor: nothing but floor for the first 100 m
-    for (let c = 0; c < 100 / CHUNK; c++) {
-      expect(g.has('floor', c)).toBe(true);
-      expect(g.has('ceiling', c) || g.has('left', c) || g.has('right', c)).toBe(false);
-    }
-  });
-
-  it('every transition respects the feasibility gap limits for its difficulty', () => {
-    for (const seed of [1, 2, 3, 99, 2024]) {
-      const g = gen(seed, 10 * KM);
-      for (let i = 4; i < g.route.length; i++) {
-        const a = g.route[i - 1], b = g.route[i];
-        const gapM = (b.start - a.end) * CHUNK;
-        const lim = gapLimits(a.surface, b.surface, difficultyAt(a.end * CHUNK));
-        expect(gapM).toBeGreaterThanOrEqual(lim.min - CHUNK);
-        expect(gapM).toBeLessThanOrEqual(lim.max + CHUNK / 2 + 0.001);
-        expect(b.end).toBeGreaterThan(a.end); // always progresses forward
-        expect(b.start).toBeGreaterThan(a.start);
-      }
-    }
-  });
-
-  it('places fuel pickups so the estimated fuel need between pickups never exceeds the tank', () => {
-    for (const seed of [1, 2, 3, 99, 2024, 777]) {
-      const g = gen(seed, 10 * KM);
-      let used = 0;
-      let pi = 0;
-      const pickups = [...g.pickups].sort((x, y) => x.d - y.d);
-      for (let i = 1; i < g.route.length; i++) {
-        const a = g.route[i - 1], b = g.route[i];
-        const transitionAt = Math.min(a.end, b.start) * CHUNK;
-        while (pi < pickups.length && pickups[pi].d <= transitionAt) {
-          used = 0;
-          pi++;
+describe('validated course streaming', () => {
+  it('keeps physical colliders, pickups and retained plans bounded for 50 km', () => {
+    const world = makeWorld();
+    const source = new SynchronousChunkSource(7);
+    const course = new Course(world, 7, { source });
+    // Even the shortest recovery chunk has this much forward extent. One straddling
+    // chunk can be retained at either edge of the streaming window.
+    const minChunkLength = PLANNER_CONFIG.leadMin + CONFIG.car.maxForwardSpeed * PLANNER_CONFIG.recoverySeconds;
+    const maxPlans = Math.ceil((STREAM.generateAhead + STREAM.keepBehind) / minChunkLength) + 1;
+    const maxBuiltPlans = Math.ceil((STREAM.buildAhead + STREAM.keepBehind) / minChunkLength) + 1;
+    try {
+      for (let distance = 0; distance <= 50_000; distance += 500) {
+        course.update(distance);
+        expect(course.needsBuffer(distance)).toBe(false);
+        expect(course.chunks.length).toBeLessThanOrEqual(maxPlans);
+        expect(source.generator.chunks.length).toBeLessThanOrEqual(maxPlans);
+        expect(course.activePickups.size).toBeLessThanOrEqual(maxBuiltPlans * 2);
+        expect(course.slabs.active.size).toBeLessThanOrEqual(maxBuiltPlans * 7 + 1);
+        expect(course.obstacles.active.size).toBeLessThanOrEqual(maxBuiltPlans);
+        expect(course.routeWaypoints.length).toBeLessThanOrEqual(maxPlans * Math.ceil(PLANNER_CONFIG.maxValidationSeconds * CONFIG.physicsHz / PLANNER_CONFIG.sampleEverySteps));
+        for (const chunk of course.chunks) {
+          expect(chunk.d1).toBeGreaterThanOrEqual(distance - STREAM.keepBehind);
+          expect(chunk.validation.accepted).toBe(true);
         }
-        used += transitionFuelCost(a.surface, b.surface, (b.start - a.end) * CHUNK);
-        expect(used).toBeLessThanOrEqual(CONFIG.fuel.capacity * 0.9);
+        for (const slab of course.builtSlabs) expect(slab.d1).toBeGreaterThanOrEqual(distance - STREAM.keepBehind);
+        for (const pickup of course.activePickups.values()) expect(pickup.d).toBeGreaterThanOrEqual(distance - STREAM.keepBehind);
+        for (const obstacle of course.obstacles.active.values()) expect(obstacle.d + obstacle.half.z).toBeGreaterThanOrEqual(distance - STREAM.keepBehind);
+        // Adjacent logical slabs share one physical run, avoiding collision seams.
+        // Count the owned colliders to catch orphaned allocations during run rebuilds.
+        expect(course.slabs.colliderCount).toBeLessThanOrEqual(course.slabs.active.size);
+        expect(world.colliders.len()).toBe(course.slabs.colliderCount + course.obstacles.active.size);
+        expect(world.colliders.len()).toBeLessThanOrEqual(maxBuiltPlans * 15 + 1);
       }
+      expect(course.chunks[0].id).toBeGreaterThan(70);
+      expect(source.frontier).toBeGreaterThanOrEqual(50_000 + STREAM.generateAhead);
+    } finally {
+      course.dispose();
+      expect(world.colliders.len()).toBe(0);
+      world.free();
     }
-  });
+  }, 120000);
 
-  it('pickups sit on a route surface that exists at that point', () => {
-    const g = gen(5, 8 * KM);
-    for (const p of g.pickups) expect(g.has(p.surface, Math.floor(p.d / CHUNK))).toBe(true);
-  });
-
-  it('all four surfaces appear and disappear independently (many combinations occur)', () => {
-    const g = gen(42, 15 * KM);
-    const combos = new Map<string, number>();
-    const toggles: Record<string, number> = { floor: 0, ceiling: 0, left: 0, right: 0 };
-    let prev: Record<string, boolean> | null = null;
-    for (let c = 0; c < (15 * KM) / CHUNK - 200; c++) {
-      const cur = Object.fromEntries(SURFACES.map((s) => [s, g.has(s, c)])) as Record<string, boolean>;
-      const key = SURFACES.filter((s) => cur[s]).join('+') || 'none';
-      combos.set(key, (combos.get(key) ?? 0) + 1);
-      if (prev) for (const s of SURFACES) if (prev[s] !== cur[s]) toggles[s]++;
-      prev = cur;
-    }
-    for (const s of SURFACES) expect(toggles[s]).toBeGreaterThan(20);
-    // Spec examples: only floor, only ceiling, right wall + ceiling, both walls without floor, all four, flight gaps
-    expect(combos.get('floor')).toBeGreaterThan(0);
-    expect(combos.get('ceiling')).toBeGreaterThan(0);
-    expect(combos.get('ceiling+right')).toBeGreaterThan(0);
-    expect(combos.get('left+right')).toBeGreaterThan(0);
-    expect(combos.get('floor+ceiling+left+right')).toBeGreaterThan(0);
-    expect(combos.get('none')).toBeGreaterThan(0);
-    expect(combos.size).toBeGreaterThanOrEqual(12);
-  });
-
-  it('difficulty ramps up: later sections have shorter pieces and larger gaps', () => {
-    const lens: number[][] = [[], []], gaps: number[][] = [[], []];
-    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
-      const g = gen(seed, 9 * KM);
-      for (let i = 4; i < g.route.length; i++) {
-        const d = g.route[i].start * CHUNK;
-        const bucket = d < 1500 ? 0 : d > 5000 ? 1 : -1;
-        if (bucket < 0) continue;
-        lens[bucket].push(g.route[i].end - g.route[i].start);
-        gaps[bucket].push(g.route[i].start - g.route[i - 1].end);
-      }
-    }
-    const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-    expect(avg(lens[1])).toBeLessThan(avg(lens[0]) * 0.8);
-    expect(avg(gaps[1])).toBeGreaterThan(avg(gaps[0]) + 1);
-    expect(difficultyAt(0)).toBe(0);
-    expect(difficultyAt(100 * KM)).toBe(1);
-  });
-
-  it('extends indefinitely', () => {
-    const g = gen(9, 50 * KM);
-    expect(g.lastPiece.end * CHUNK).toBeGreaterThan(50 * KM);
-  });
-});
-
-describe('Course streaming', () => {
-  it('builds slabs ahead, removes slabs behind, and stays bounded', async () => {
-    await initPhysics();
-    const world = new RAPIER.World({ x: 0, y: -20, z: 0 });
-    const course = new Course(world, 7);
-    let maxActive = 0;
-    for (let d = 0; d <= 8 * KM; d += 10) {
-      course.update(d);
-      const slabs = course.builtSlabs;
-      maxActive = Math.max(maxActive, slabs.length);
-      for (const s of slabs) {
-        expect(s.d1).toBeGreaterThanOrEqual(d - STREAM.keepBehind);
-        expect(s.d0).toBeLessThanOrEqual(d + STREAM.buildAhead);
-      }
-      // whatever the generator says exists in the next 300 m is physically built
-      for (let c = Math.ceil(d / CHUNK) + 1; c < (d + 300) / CHUNK; c++) {
-        for (const surf of SURFACES) {
-          const built = slabs.some((s) => s.surface === surf && s.d0 <= c * CHUNK && s.d1 >= (c + 1) * CHUNK);
-          expect(built).toBe(course.generator.has(surf, c));
+  it('builds exactly the certified intervals, obstacles and pickups without quantization', () => {
+    const world = makeWorld();
+    const source = new SynchronousChunkSource(42, { template: 'multiple' });
+    const course = new Course(world, 42, { source });
+    try {
+      for (const distance of [0, 350, 750, 1200, 1800]) {
+        course.update(distance);
+        const retained = course.chunks.filter(c => c.d0 <= distance + STREAM.buildAhead);
+        const expectedSlabs = retained.flatMap(c => c.slabs).filter(s => s.d1 >= distance - STREAM.keepBehind);
+        if (distance <= STREAM.keepBehind) expectedSlabs.unshift({ surface: 'floor', d0: -30, d1: 0, bevel: false });
+        expect(course.builtSlabs.map(withoutId)).toEqual(expectedSlabs);
+        expect([...course.obstacles.active.values()].map(withoutId)).toEqual(
+          retained.flatMap(c => c.obstacles).filter(o => o.d + o.half.z >= distance - STREAM.keepBehind).map(withoutId));
+        expect([...course.activePickups.values()].map(withoutId)).toEqual(
+          retained.flatMap(c => c.pickups).filter(p => p.d >= distance - STREAM.keepBehind).map(withoutId));
+        for (let i = 1; i < course.chunks.length; i++) {
+          expect(course.chunks[i].d0).toBe(course.chunks[i - 1].d1);
+          expect(course.chunks[i].entry).toEqual(course.chunks[i - 1].exit);
         }
       }
-      expect(world.colliders.len()).toBeGreaterThanOrEqual(slabs.length); // lead piece (+ box) per slab
+    } finally {
+      course.dispose();
+      expect(world.colliders.len()).toBe(0);
+      world.free();
     }
-    expect(maxActive).toBeLessThan(80);
-    world.free();
+  }, 30000);
+
+  it('reproduces published geometry for a seed regardless of update cadence', () => {
+    const a = new SynchronousChunkSource(123), b = new SynchronousChunkSource(123), c = new SynchronousChunkSource(124);
+    try {
+      a.request(1800, -100);
+      const expected = a.drain();
+      b.request(700, -100);
+      const actual = b.drain();
+      b.request(1800, -100);
+      actual.push(...b.drain());
+      expect(actual).toEqual(expected);
+      c.request(700, -100);
+      expect(c.drain()[0].slabs).not.toEqual(expected[0].slabs);
+    } finally { a.dispose(); b.dispose(); c.dispose(); }
+  }, 30000);
+
+  it('waits for asynchronous terrain and consumes each pickup only once', () => {
+    const world = makeWorld();
+    const source = new QueuedSource();
+    const course = new Course(world, 19, { source });
+    try {
+      expect(course.needsBuffer(10)).toBe(true);
+      expect(course.terrainStatus).toBe('Preparing road…');
+      expect(course.chunks).toHaveLength(0);
+      expect(course.builtSlabs).toHaveLength(1);
+      expect(source.requests[0]).toEqual({ until: STREAM.generateAhead, forgetBefore: -STREAM.keepBehind });
+      const chunk = new ReachableCourseGenerator(19).next();
+      source.deliver(chunk);
+      course.update(10);
+      expect(course.needsBuffer(10)).toBe(false);
+      expect(course.terrainStatus).toBeNull();
+      expect(course.chunks).toEqual([chunk]);
+      expect(course.needsBuffer(chunk.d1 - CONFIG.car.maxForwardSpeed)).toBe(true);
+      const pickup = [...course.activePickups.values()][0];
+      expect(course.collect(pickup.id)).toBe(true);
+      expect(course.collect(pickup.id)).toBe(false);
+      source.deliver(chunk); // Duplicate worker delivery must not rebuild a consumed pickup.
+      course.update(10);
+      course.update(11);
+      expect([...course.activePickups.values()].some(p => p.d === pickup.d)).toBe(false);
+      expect(course.chunks).toHaveLength(1);
+      source.error = 'worker failed';
+      course.update(10);
+      expect(course.needsBuffer(10)).toBe(true);
+      expect(course.terrainStatus).toBe('Terrain generation failed · R to retry');
+    } finally {
+      course.dispose();
+      expect(world.colliders.len()).toBe(0);
+      world.free();
+    }
+    expect(source.disposed).toBe(true);
+    expect(course.activePickups.size).toBe(0);
+    expect(course.chunks).toHaveLength(0);
   });
 
-  it('never overlaps two slabs on the same surface', async () => {
-    await initPhysics();
-    const world = new RAPIER.World({ x: 0, y: -20, z: 0 });
-    const course = new Course(world, 11);
-    for (let d = 0; d <= 5 * KM; d += 25) {
-      course.update(d);
-      const slabs = course.builtSlabs;
-      for (const a of slabs) for (const b of slabs) {
-        if (a.id !== b.id && a.surface === b.surface) expect(a.d1 <= b.d0 || b.d1 <= a.d0).toBe(true);
-      }
+  it('rejects a gap in the published chunk boundaries', () => {
+    const world = makeWorld();
+    const source = new QueuedSource();
+    const course = new Course(world, 19, { source });
+    try {
+      const first = new ReachableCourseGenerator(19).next();
+      source.deliver(first);
+      course.update(0);
+      const colliders = world.colliders.len();
+      source.deliver({ ...first, id: first.id + 1, d0: first.d1 + 1, d1: first.d1 * 2 + 1 });
+      expect(() => course.update(0)).toThrow('Non-contiguous terrain stream');
+      expect(course.chunks).toEqual([first]);
+      expect(world.colliders.len()).toBe(colliders);
+    } finally {
+      course.dispose();
+      expect(world.colliders.len()).toBe(0);
+      world.free();
     }
-    world.free();
   });
 
-  it('does not create a slab where the car currently is', async () => {
-    await initPhysics();
-    const world = new RAPIER.World({ x: 0, y: -20, z: 0 });
-    const course = new Course(world, 3);
-    // Pretend the car is lodged inside where every future floor slab would be.
-    let inside = true;
-    course.carBounds = () => (inside
-      ? { min: { x: -50, y: -2, z: -1e6 }, max: { x: 50, y: -0.2, z: 1e6 } }
-      : { min: { x: 0, y: 3, z: 0 }, max: { x: 1, y: 4, z: 1 } });
-    const before = course.builtSlabs.filter((s) => s.surface === 'floor').length;
-    course.update(1500);
-    expect(course.builtSlabs.filter((s) => s.surface === 'floor' && s.d0 > 1000).length).toBe(0);
-    inside = false;
-    course.update(1500);
-    expect(course.builtSlabs.filter((s) => s.surface === 'floor').length).toBeGreaterThan(0);
-    expect(before).toBeGreaterThanOrEqual(0);
-    world.free();
+  it('rejects an unvalidated candidate before building any of its geometry', () => {
+    const world = makeWorld();
+    const source = new QueuedSource();
+    const course = new Course(world, 19, { source });
+    try {
+      const valid = new ReachableCourseGenerator(19).next();
+      source.deliver({ ...valid, validation: { ...valid.validation, accepted: false, reasons: ['unreachable'] } });
+      expect(() => course.update(0)).toThrow('Unvalidated terrain was not published');
+      expect(course.chunks).toHaveLength(0);
+      expect(course.builtSlabs).toHaveLength(1);
+      expect(course.activePickups.size).toBe(0);
+    } finally {
+      course.dispose();
+      expect(world.colliders.len()).toBe(0);
+      world.free();
+    }
   });
 });
 
 describe('fuel pickups', () => {
-  it('collecting a pickup refills the tank; it is consumed once', async () => {
+  it('collecting a pickup refills the tank and consumes it once', async () => {
     const sim = await makeSim([{ surface: 'floor', d0: -20, d1: 500 }]);
-    sim.fuel.consume(3, 1); // burn fuel first
-    expect(sim.fuel.value).toBeCloseTo(2);
-    const level = sim.level as unknown as { activePickups: Map<number, unknown> };
-    level.activePickups.set(1, { id: 1, x: 0, y: 1.3, d: sim.distance + 40 });
-    run(sim, 3, { accelerate: true });
-    expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity, 5);
-    expect(sim.refuelCount).toBe(1);
-    expect(level.activePickups.size).toBe(0);
+    try {
+      sim.fuel.consume(3, 1);
+      expect(sim.fuel.value).toBeCloseTo(2);
+      sim.level.activePickups!.set(1, { id: 1, x: 0, y: 1.3, d: sim.distance + 40 });
+      let collectedAt = -1;
+      const steps = Math.round(3 / sim.dt);
+      for (let i = 0; i < steps; i++) {
+        sim.step(controls({ accelerate: true }));
+        if (collectedAt < 0 && sim.refuelCount === 1) {
+          collectedAt = i;
+          expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity, 5);
+        }
+      }
+      expect(collectedAt).toBeGreaterThanOrEqual(0);
+      // Holding acceleration keeps spending fuel after the one-time refill.
+      const afterPickupSeconds = (steps - collectedAt - 1) * sim.dt;
+      expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - afterPickupSeconds * CONFIG.thrusters.boostFuelRate, 5);
+      expect(sim.refuelCount).toBe(1);
+      expect(sim.level.activePickups!.size).toBe(0);
+    } finally { sim.dispose(); }
   });
 
   it('is not collected when the car passes far from it', async () => {
     const sim = await makeSim([{ surface: 'floor', d0: -20, d1: 500 }]);
-    const level = sim.level as unknown as { activePickups: Map<number, unknown> };
-    level.activePickups.set(1, { id: 1, x: 0, y: 8.7, d: sim.distance + 40 });
-    run(sim, 3, { accelerate: true });
-    expect(sim.refuelCount).toBe(0);
+    try {
+      sim.level.activePickups!.set(1, { id: 1, x: 0, y: 8.7, d: sim.distance + 40 });
+      run(sim, 3, { accelerate: true });
+      expect(sim.refuelCount).toBe(0);
+    } finally { sim.dispose(); }
   });
 
-  it('does not tunnel through a pickup at boost speed (swept test)', async () => {
+  it('does not tunnel through a pickup at maximum forward speed', async () => {
     const sim = await makeSim([{ surface: 'floor', d0: -20, d1: 2000 }]);
-    run(sim, 3, { accelerate: true });
-    run(sim, 1.5, { accelerate: true, forwardThrust: true });
-    const level = sim.level as unknown as { activePickups: Map<number, unknown> };
-    level.activePickups.set(1, { id: 1, x: 0, y: 1.3, d: sim.distance + 30 });
-    run(sim, 1.5, { accelerate: true });
-    expect(sim.refuelCount).toBe(1);
+    try {
+      run(sim, 4.5, { accelerate: true });
+      sim.level.activePickups!.set(1, { id: 1, x: 0, y: 1.3, d: sim.distance + 30 });
+      run(sim, 1.5, { accelerate: true });
+      expect(sim.refuelCount).toBe(1);
+    } finally { sim.dispose(); }
   });
 });

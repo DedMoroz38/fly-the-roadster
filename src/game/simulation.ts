@@ -14,8 +14,10 @@ export function initPhysics(): Promise<void> {
 
 export interface SimulationOptions {
   spawn?: Vec3;
-  /** Builds the level for this world (static test level or procedural course). */
-  createLevel: (world: RAPIER.World) => Level;
+  /** Initial logical origin; spawn and all physics positions remain local. */
+  originDistance?: number;
+  /** Builds the level in the supplied origin frame; nonzero origins must be passed to its collider sets. */
+  createLevel: (world: RAPIER.World, originDistance: number) => Level;
 }
 
 /** Snapshot of the car pose used for render interpolation. */
@@ -37,22 +39,20 @@ export class Simulation {
   readonly level: Level;
   readonly fuel = new FuelTank(CONFIG.fuel.capacity);
   time = 0;
+  /** Logical forward coordinate represented by local physics Z=0. */
+  originDistance: number;
   prevPose: Pose;
+  private queriedSlabVersion = -1;
+  private queriedObstacleVersion = -1;
 
   constructor(opts: SimulationOptions) {
     this.world = new RAPIER.World({ x: 0, y: -CONFIG.gravity, z: 0 });
     this.world.timestep = this.dt;
-    this.level = opts.createLevel(this.world);
+    this.originDistance = opts.originDistance ?? 0;
+    this.level = opts.createLevel(this.world, this.originDistance);
+    this.level.setOriginDistance?.(this.originDistance);
     const spawn = opts.spawn ?? { x: 0, y: CONFIG.car.halfExtents.y + 0.02, z: -10 };
     this.vehicle = new Vehicle(this.world, spawn);
-    if ('carBounds' in this.level) {
-      const he = CONFIG.car.halfExtents;
-      const m = Math.max(he.x, he.y, he.z) + 0.5;
-      this.level.carBounds = () => {
-        const p = this.vehicle.position;
-        return { min: { x: p.x - m, y: p.y - m, z: p.z - m }, max: { x: p.x + m, y: p.y + m, z: p.z + m } };
-      };
-    }
     this.prevPose = this.pose();
   }
 
@@ -61,7 +61,7 @@ export class Simulation {
 
   /** Forward distance travelled (metres along -Z). */
   get distance(): number {
-    return -this.vehicle.position.z;
+    return this.originDistance - this.vehicle.position.z;
   }
 
   pose(): Pose {
@@ -72,11 +72,46 @@ export class Simulation {
   step(controls: ControlState) {
     this.prevPose = this.pose();
     this.level.update(this.distance);
+    const slabVersion = this.level.slabs.version, obstacleVersion = this.level.obstacles?.version ?? 0;
+    if (slabVersion !== this.queriedSlabVersion || obstacleVersion !== this.queriedObstacleVersion) {
+      // Streaming may replace a joined surface collider between physics steps.
+      // Its shape is ready immediately; Rapier's scene BVH updates during world.step.
+      this.vehicle.invalidateSurfaceQueries();
+      this.queriedSlabVersion = slabVersion;
+      this.queriedObstacleVersion = obstacleVersion;
+    }
     this.vehicle.applyControls(controls, this.dt, this.fuel);
     this.world.step();
     this.vehicle.afterStep(controls);
+    this.rebaseOrigin();
     this.collectPickups();
     this.time += this.dt;
+  }
+
+  /** Changes only the coordinate frame, preserving motion and logical terrain metadata. */
+  rebaseOrigin(): number {
+    const threshold = CONFIG.origin.rebaseDistance;
+    const shift = Math.trunc(-this.vehicle.position.z / threshold) * threshold;
+    if (!shift) return 0;
+    this.world.forEachRigidBody(body => {
+      const p = body.translation();
+      const next = body.isKinematic() ? body.nextTranslation() : null;
+      body.setTranslation({ x: p.x, y: p.y, z: p.z + shift }, false);
+      if (next) body.setNextKinematicTranslation({ x: next.x, y: next.y, z: next.z + shift });
+    });
+    this.world.forEachCollider(collider => {
+      if (collider.parent()) return; // attached colliders follow their body exactly once
+      const p = collider.translation();
+      collider.setTranslation({ x: p.x, y: p.y, z: p.z + shift });
+    });
+    this.world.propagateModifiedBodyPositionsToColliders();
+    this.originDistance += shift;
+    this.prevPose.z += shift;
+    this.level.setOriginDistance?.(this.originDistance);
+    // Rapier 0.19 refreshes its scene BVH on the next real physics step. For that one
+    // frame, surface probes query collider shapes directly instead of stale world bounds.
+    this.vehicle.invalidateSurfaceQueries();
+    return shift;
   }
 
   /** Swept sphere test between last and current car position against every active pickup. */
@@ -87,7 +122,7 @@ export class Simulation {
     const b = this.vehicle.position;
     const r2 = CONFIG.fuel.pickupRadius ** 2;
     for (const p of pickups.values()) {
-      const pz = -p.d;
+      const pz = this.originDistance - p.d;
       const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
       const len2 = abx * abx + aby * aby + abz * abz;
       let t = len2 > 0 ? ((p.x - a.x) * abx + (p.y - a.y) * aby + (pz - a.z) * abz) / len2 : 0;
@@ -101,6 +136,7 @@ export class Simulation {
   }
 
   dispose() {
+    this.level.dispose?.();
     this.world.free();
   }
 }

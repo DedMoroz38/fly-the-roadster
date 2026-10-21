@@ -5,6 +5,119 @@ import { CameraRig } from './cameraRig';
 import { PickupView } from './pickupView';
 import { Simulation } from '../game/simulation';
 import { lerp } from '../core/math';
+import type { RouteWaypoint } from '../game/course/planner';
+
+interface RouteSource { version: number; readonly routeWaypoints: readonly RouteWaypoint[] }
+interface ObstacleSource {
+  version: number;
+  active: ReadonlyMap<number, { id: number; x: number; y: number; d: number; half: { x: number; y: number; z: number } }>;
+}
+
+/** A development-only movement trace. Rebuild only when streamed route data changes. */
+export class CourseRouteView {
+  readonly group = new THREE.Group();
+  readonly line = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({
+    color: 0xd6ff42, transparent: true, opacity: 0.85, depthTest: false, toneMapped: false, fog: false,
+  }));
+  private source: RouteSource | null = null;
+  private syncedVersion = -1;
+  private originDistance = 0;
+
+  constructor() {
+    this.group.name = 'debug-route';
+    this.group.visible = false;
+    this.line.name = 'validated-movement-route';
+    this.line.renderOrder = 8;
+    this.group.add(this.line);
+  }
+
+  sync(source: RouteSource | null, enabled: boolean, originDistance = 0) {
+    this.group.visible = enabled && source !== null;
+    if (!source) { if (this.source) this.clear(); return; }
+    if (!enabled || source === this.source && source.version === this.syncedVersion && originDistance === this.originDistance) return;
+    const points = source.routeWaypoints;
+    const positions = new Float32Array(points.length * 3);
+    points.forEach((point, index) => {
+      positions[index * 3] = point.x;
+      positions[index * 3 + 1] = point.y;
+      positions[index * 3 + 2] = originDistance - point.d;
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.computeBoundingSphere();
+    this.line.geometry.dispose();
+    this.line.geometry = geometry;
+    this.source = source;
+    this.syncedVersion = source.version;
+    this.originDistance = originDistance;
+  }
+
+  clear() {
+    this.line.geometry.dispose();
+    this.line.geometry = new THREE.BufferGeometry();
+    this.source = null;
+    this.syncedVersion = -1;
+    this.originDistance = 0;
+    this.group.visible = false;
+  }
+
+  dispose() {
+    this.line.geometry.dispose();
+    this.line.material.dispose();
+    this.group.clear();
+    this.source = null;
+  }
+}
+
+/** Shared geometry keeps streamed hazard rendering bounded and inexpensive. */
+export class ObstacleView {
+  readonly group = new THREE.Group();
+  private meshes = new Map<number, THREE.Group>();
+  private box = new THREE.BoxGeometry(1, 1, 1);
+  private edges = new THREE.EdgesGeometry(this.box);
+  private material = new THREE.MeshStandardMaterial({ color: 0x5b2438, emissive: 0x9d173e, emissiveIntensity: 0.45, metalness: 0.35, roughness: 0.55 });
+  private edgeMaterial = new THREE.LineBasicMaterial({ color: 0xff677b, toneMapped: false });
+  private source: ObstacleSource | null = null;
+  private syncedVersion = -1;
+  private originDistance = 0;
+
+  sync(source: ObstacleSource | undefined, originDistance = 0) {
+    if (!source) { if (this.source) this.clear(); return; }
+    if (source !== this.source) { this.clear(); this.source = source; }
+    if (source.version === this.syncedVersion && originDistance === this.originDistance) return;
+    this.syncedVersion = source.version;
+    this.originDistance = originDistance;
+    for (const [id, mesh] of this.meshes) {
+      if (!source.active.has(id)) { this.group.remove(mesh); this.meshes.delete(id); }
+    }
+    for (const obstacle of source.active.values()) {
+      let mesh = this.meshes.get(obstacle.id);
+      if (!mesh) {
+        mesh = new THREE.Group();
+        mesh.name = `obstacle-${obstacle.id}`;
+        mesh.add(new THREE.Mesh(this.box, this.material));
+        mesh.add(new THREE.LineSegments(this.edges, this.edgeMaterial));
+        this.meshes.set(obstacle.id, mesh);
+        this.group.add(mesh);
+      }
+      mesh.position.set(obstacle.x, obstacle.y, originDistance - obstacle.d);
+      mesh.scale.set(obstacle.half.x * 2, obstacle.half.y * 2, obstacle.half.z * 2);
+    }
+  }
+
+  clear() {
+    this.group.clear();
+    this.meshes.clear();
+    this.source = null;
+    this.syncedVersion = -1;
+    this.originDistance = 0;
+  }
+
+  dispose() {
+    this.clear();
+    this.box.dispose(); this.edges.dispose(); this.material.dispose(); this.edgeMaterial.dispose();
+  }
+}
 
 /** Owns the Three.js scene and draws the simulation state (with interpolation). */
 export class GameRenderer {
@@ -14,10 +127,14 @@ export class GameRenderer {
   readonly car = new CarModel();
   readonly surfaces = new SurfaceView();
   readonly pickups = new PickupView();
+  readonly route = new CourseRouteView();
+  readonly obstacles = new ObstacleView();
+  debugEnabled = false;
   readonly rig: CameraRig;
   private carLight: THREE.PointLight;
   private stars: THREE.Points;
   private seenAttachCount = 0;
+  private originDistance = 0;
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -48,6 +165,8 @@ export class GameRenderer {
     this.scene.add(this.surfaces.group);
     this.scene.add(this.pickups.group);
     this.scene.add(this.car.group);
+    this.scene.add(this.route.group);
+    this.scene.add(this.obstacles.group);
     this.resize();
   }
 
@@ -64,7 +183,10 @@ export class GameRenderer {
     this.rig.reset();
     this.pickups.clear();
     this.surfaces.clear();
+    this.route.clear();
+    this.obstacles.clear();
     this.seenAttachCount = 0;
+    this.originDistance = 0;
   }
 
   /**
@@ -73,8 +195,17 @@ export class GameRenderer {
    * frameDt: wall-clock frame time — drives camera smoothing and idle animation.
    */
   render(sim: Simulation, alpha: number, simDt: number, frameDt: number) {
-    this.surfaces.sync(sim.level.slabs);
-    this.pickups.sync(sim.level, sim.distance);
+    const origin = sim.originDistance;
+    if (origin !== this.originDistance) {
+      this.rig.rebase(origin - this.originDistance);
+      this.originDistance = origin;
+    }
+    this.surfaces.sync(sim.level.slabs, origin);
+    const routeSource = 'routeWaypoints' in sim.level && 'version' in sim.level
+      ? sim.level as typeof sim.level & RouteSource : null;
+    this.route.sync(routeSource, this.debugEnabled, origin);
+    this.obstacles.sync((sim.level as typeof sim.level & { obstacles?: ObstacleSource }).obstacles, origin);
+    this.pickups.sync(sim.level, sim.distance, origin);
     this.pickups.update(frameDt);
     const a = sim.prevPose;
     const b = sim.pose();
@@ -86,6 +217,7 @@ export class GameRenderer {
     this.car.group.rotation.set(0, 0, a.roll + dRoll * alpha);
     this.car.update(simDt, sim.vehicle.forwardSpeed);
     this.car.setThrust(sim.vehicle.liftThrust, sim.vehicle.forwardThrust);
+    this.car.setRollThrust(sim.vehicle.rollLeftThrust, sim.vehicle.rollRightThrust);
     if (sim.vehicle.attachCount !== this.seenAttachCount) {
       if (sim.vehicle.attachCount > this.seenAttachCount) this.car.flashAttach();
       this.seenAttachCount = sim.vehicle.attachCount;
@@ -105,6 +237,24 @@ export class GameRenderer {
   }
 
   dispose() {
+    this.route.dispose();
+    this.obstacles.dispose();
+    this.surfaces.dispose();
+    this.pickups.dispose();
+    // Car parts share several geometries/materials. Dispose each remaining
+    // scene resource once after views release their own cached assets.
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    this.scene.traverse(object => {
+      const drawable = object as THREE.Mesh;
+      if (drawable.geometry) geometries.add(drawable.geometry);
+      if (drawable.material) {
+        for (const material of Array.isArray(drawable.material) ? drawable.material : [drawable.material]) materials.add(material);
+      }
+    });
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) material.dispose();
+    this.scene.clear();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

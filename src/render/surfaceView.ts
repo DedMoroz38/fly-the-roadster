@@ -12,17 +12,18 @@ export const SURFACE_COLORS: Record<SurfaceType, { base: number; line: number }>
 };
 
 /** Standard material with a world-space neon grid injected into the emissive term. */
-function gridMaterial(surface: SurfaceType): THREE.MeshStandardMaterial {
+function gridMaterial(surface: SurfaceType, gridOrigin: { value: number }): THREE.MeshStandardMaterial {
   const { base, line } = SURFACE_COLORS[surface];
   const mat = new THREE.MeshStandardMaterial({ color: base, roughness: 0.55, metalness: 0.35 });
   const lineColor = new THREE.Color(line);
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uLineColor = { value: lineColor };
+    shader.uniforms.uGridOrigin = gridOrigin;
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGridPos;\nvarying vec3 vGridNormal;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGridPos;\nvarying vec3 vGridNormal;\nuniform float uGridOrigin;')
       .replace(
         '#include <worldpos_vertex>',
-        '#include <worldpos_vertex>\nvGridPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvGridNormal = normalize(mat3(modelMatrix) * objectNormal);',
+        '#include <worldpos_vertex>\nvGridPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvGridPos.z -= uGridOrigin;\nvGridNormal = normalize(mat3(modelMatrix) * objectNormal);',
       );
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGridPos;\nvarying vec3 vGridNormal;\nuniform vec3 uLineColor;')
@@ -52,23 +53,33 @@ export class SurfaceView {
   private edgeGeo = new THREE.BoxGeometry(1, 1, 1);
   private syncedVersion = -1;
   private source: SlabSet | null = null;
+  private originDistance = 0;
+  private gridOrigin = { value: 0 };
 
   constructor() {
     this.materials = {
-      floor: gridMaterial('floor'),
-      ceiling: gridMaterial('ceiling'),
-      left: gridMaterial('left'),
-      right: gridMaterial('right'),
+      floor: gridMaterial('floor', this.gridOrigin),
+      ceiling: gridMaterial('ceiling', this.gridOrigin),
+      left: gridMaterial('left', this.gridOrigin),
+      right: gridMaterial('right', this.gridOrigin),
     };
     const edge = (s: SurfaceType) => new THREE.MeshBasicMaterial({ color: SURFACE_COLORS[s].line });
     this.edgeMaterials = { floor: edge('floor'), ceiling: edge('ceiling'), left: edge('left'), right: edge('right') };
   }
 
-  sync(slabs: SlabSet) {
+  sync(slabs: SlabSet, originDistance = 0) {
     if (this.source !== slabs) {
       this.clear();
       this.source = slabs;
       this.syncedVersion = -1;
+    }
+    if (originDistance !== this.originDistance) {
+      for (const [id, mesh] of this.meshes) {
+        const slab = slabs.active.get(id);
+        if (slab) mesh.position.z = originDistance - slab.d0;
+      }
+      this.originDistance = originDistance;
+      this.gridOrigin.value = originDistance % 4;
     }
     if (slabs.version === this.syncedVersion) return;
     this.syncedVersion = slabs.version;
@@ -77,8 +88,12 @@ export class SurfaceView {
     }
     for (const slab of slabs.active.values()) {
       if (this.meshes.has(slab.id)) continue;
-      const { box, lead } = slabParts(slab.surface, slab.d0, slab.d1, slab.bevel !== false);
+      // Build the hull near zero before any Float32 conversion. The holder
+      // supplies the small distance from the simulation's moving origin.
+      const length = slab.d1 - slab.d0;
+      const { box, lead } = slabParts(slab.surface, 0, length, slab.bevel !== false);
       const holder = new THREE.Group();
+      holder.position.z = originDistance - slab.d0;
       if (box) {
         const mesh = new THREE.Mesh(this.boxGeo, this.materials[slab.surface]);
         mesh.scale.set(box.half.x * 2, box.half.y * 2, box.half.z * 2);
@@ -93,7 +108,7 @@ export class SurfaceView {
         holder.userData.ownGeometry = geo;
       }
       // Glowing bars across both ends of the slab so starts, ends and gaps read clearly.
-      const ends = slabParts(slab.surface, slab.d0, slab.d1, false).box!;
+      const ends = slabParts(slab.surface, 0, length, false).box!;
       for (const end of [-1, 1]) {
         if (end === 1 && slab.bevel === false) continue; // +1 is the start (z = -d0); continuation seam: no marker
         const bar = new THREE.Mesh(this.edgeGeo, this.edgeMaterials[slab.surface]);
@@ -104,8 +119,8 @@ export class SurfaceView {
       // Neon trim along the corridor-side edges of the surface: frames the corridor and gives
       // strong perspective lines for depth.
       const { halfWidth: W, height: H } = CONFIG.corridor;
-      const len = slab.d1 - slab.d0 - (slab.bevel === false ? 0 : 3);
-      const zc = -(slab.d0 + (slab.bevel === false ? 0 : 3) + slab.d1) / 2;
+      const len = length - (slab.bevel === false ? 0 : 3);
+      const zc = -((slab.bevel === false ? 0 : 3) + length) / 2;
       const trims: [number, number][] =
         slab.surface === 'floor' ? [[-W, 0.02], [W, 0.02]]
         : slab.surface === 'ceiling' ? [[-W, H - 0.02], [W, H - 0.02]]
@@ -132,5 +147,15 @@ export class SurfaceView {
     for (const [id, obj] of [...this.meshes]) this.removeMesh(id, obj);
     this.source = null;
     this.syncedVersion = -1;
+    this.originDistance = 0;
+    this.gridOrigin.value = 0;
+  }
+
+  dispose() {
+    this.clear();
+    this.boxGeo.dispose();
+    this.edgeGeo.dispose();
+    for (const material of Object.values(this.materials)) material.dispose();
+    for (const material of Object.values(this.edgeMaterials)) material.dispose();
   }
 }

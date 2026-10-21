@@ -1,10 +1,10 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { CONFIG } from '../config';
 import { ControlState } from '../input';
-import { approach, clamp, wrapAngle } from '../../core/math';
+import { clamp, wrapAngle } from '../../core/math';
 import { classifyNormal, SurfaceType } from '../surfaces';
 import { FuelTank } from '../fuel';
-import { evaluateSuction, SuctionState } from '../suction';
+import { advanceSuctionHeat, evaluateSuction, SuctionState } from '../suction';
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -45,8 +45,12 @@ export class Vehicle {
   /** Thruster output this step, 0..1 each (for effects/HUD). */
   liftThrust = 0;
   forwardThrust = 0;
-  /** Suction toggled on by the player (E). Off by default. */
+  rollLeftThrust = 0;
+  rollRightThrust = 0;
+  /** Effective held-E suction output after thermal and energy limits. */
   suctionOn = false;
+  suctionHeat = 0;
+  suctionOverheated = false;
   suctionState: SuctionState = 'off';
   /** True on the step where a suction attachment was newly made (for effects). */
   justAttached = false;
@@ -54,6 +58,7 @@ export class Vehicle {
   attachCount = 0;
   /** Surface currently attached to / driven on, if any. */
   supportSurface: SurfaceType | null = null;
+  private surfaceQueriesDirty = false;
 
   constructor(
     private world: RAPIER.World,
@@ -76,7 +81,7 @@ export class Vehicle {
         .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min)
         .setRestitution(0)
         .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min)
-        .setDensity(1),
+        .setMass(CONFIG.car.mass),
       this.body,
     );
   }
@@ -102,15 +107,7 @@ export class Vehicle {
     // any part of the underside is over the surface, e.g. near the edge of a wall.
     for (const dz of [-he.z * 0.7, 0, he.z * 0.7]) for (const dx of [-he.x * 0.7, 0, he.x * 0.7]) {
       const ray = new RAPIER.Ray({ x: p.x + right.x * dx, y: p.y + right.y * dx, z: p.z + dz }, down);
-      const hit = this.world.castRayAndGetNormal(
-        ray,
-        he.y + maxGap,
-        true,
-        undefined,
-        undefined,
-        this.collider,
-        this.body,
-      );
+      const hit = this.castSurfaceRay(ray, he.y + maxGap);
       if (!hit) continue;
       const gap = hit.timeOfImpact - he.y;
       if (!best || gap < best.gap) {
@@ -126,207 +123,154 @@ export class Vehicle {
     return best;
   }
 
-  /** Applies driving/steering/roll/thrust control for one fixed step, before world.step(). */
+  /** Query shapes directly after coordinate/geometry changes until Rapier refreshes its BVH. */
+  invalidateSurfaceQueries() { this.surfaceQueriesDirty = true; }
+
+  private castSurfaceRay(ray: RAPIER.Ray, distance: number): { timeOfImpact: number; normal: Vec3 } | null {
+    if (!this.surfaceQueriesDirty) {
+      return this.world.castRayAndGetNormal(ray, distance, true, undefined, undefined, this.collider, this.body);
+    }
+    let closest: { timeOfImpact: number; normal: Vec3 } | null = null;
+    this.world.forEachCollider(collider => {
+      if (collider.handle === this.collider.handle || collider.parent()?.handle === this.body.handle) return;
+      const hit = collider.castRayAndGetNormal(ray, distance, true);
+      if (hit && (!closest || hit.timeOfImpact < closest.timeOfImpact)) closest = hit;
+    });
+    return closest;
+  }
+
+  /** Applies bounded forces and torque before Rapier resolves contacts. */
   applyControls(c: ControlState, dt: number, fuel: FuelTank) {
     const car = CONFIG.car;
-    if (c.toggleSuction) this.suctionOn = !this.suctionOn;
+    // Rapier keeps applied forces until explicitly cleared; controls describe this step only.
+    this.body.resetForces(true);
+    this.body.resetTorques(true);
+    // Re-evaluate the held request every step: release always detaches immediately,
+    // and holding E can resume after thermal recovery or a fuel pickup.
+    this.suctionOn = c.suction && !fuel.isEmpty;
     this.probe = this.probeSurface(CONFIG.suction.range);
     const aligned = !!this.probe && this.probe.alignment >= Math.cos((CONFIG.suction.maxAlignAngleDeg * Math.PI) / 180);
     const touching = aligned && this.probe!.gap <= car.groundProbe;
+    const floorContact = touching && this.probe!.surface === 'floor';
+    const thermal = advanceSuctionHeat({ heat: this.suctionHeat, overheated: this.suctionOverheated, active: this.suctionOn }, dt, floorContact);
+    this.suctionHeat = thermal.heat;
+    this.suctionOverheated = thermal.overheated;
+    this.suctionOn = thermal.active;
+    const requestedRoll = (c.rollLeft ? 1 : 0) - (c.rollRight ? 1 : 0);
+    // Allocate the shared tank once so simultaneous systems receive the same fractional power.
+    const energyRate = (c.thrust ? CONFIG.thrusters.liftFuelRate : 0)
+      + (c.accelerate ? CONFIG.thrusters.boostFuelRate : 0)
+      + (requestedRoll ? CONFIG.thrusters.rollFuelRate : 0)
+      + (this.suctionOn ? (floorContact ? CONFIG.suction.floorFuelRate : CONFIG.suction.fuelRate) : 0);
+    const power = fuel.consume(dt, energyRate);
+    this.liftThrust = c.thrust ? power : 0;
+    if (fuel.isEmpty) this.suctionOn = false;
     const suction = evaluateSuction(this.suctionOn, this.probe);
     const wasAttached = this.mode === 'attached';
-    // Without suction only floors (gravity holds the car down) count as drivable support.
     if (suction.state === 'attached') this.mode = 'attached';
     else if (touching && this.probe!.surface === 'floor') this.mode = 'grounded';
     else this.mode = 'airborne';
-    this.suctionState = suction.state;
+    this.suctionState = this.suctionOverheated ? 'overheated' : fuel.isEmpty ? 'no-energy' : suction.state;
     this.justAttached = this.mode === 'attached' && !wasAttached;
     if (this.justAttached) this.attachCount++;
     this.supportSurface = this.mode === 'airborne' ? null : this.probe!.surface;
 
     const v = this.body.linvel();
-    const { right } = carAxes(this.roll);
-    let fwd = -v.z;
+    const { up } = carAxes(this.roll);
+    const n = this.probe?.normal;
+    const mass = this.body.mass();
+    const acceleration = { x: 0, y: 0, z: 0 };
+    // Automatic cruise remains free in every movement mode. Fund only the extra
+    // acceleration toward W's higher target, sharing partial final fuel with other systems.
+    // Exhaustion or release returns gently toward cruise without rewriting momentum.
+    const cruiseDrive = clamp((car.cruiseSpeed + v.z) * car.driveGain, -car.coastDecel, car.acceleration);
+    const boostedDrive = clamp((car.maxForwardSpeed + v.z) * car.driveGain, -car.coastDecel, car.acceleration);
+    const boostPower = c.accelerate ? power : 0;
+    const boostDrive = (boostedDrive - cruiseDrive) * boostPower;
+    acceleration.z = -(cruiseDrive + boostDrive);
+    if (this.suctionOn && floorContact) {
+      acceleration.z -= Math.sign(v.z) * Math.min(1, Math.abs(v.z)) * CONFIG.suction.floorRollingResistance;
+    }
+    this.forwardThrust = boostPower * clamp((boostedDrive - cruiseDrive) / car.acceleration, 0, 1);
 
-    if (this.mode !== 'airborne') {
-      // Forward: arcade acceleration / braking / coasting.
-      if (c.accelerate && !c.brake) {
-        if (fwd < car.maxForwardSpeed) fwd = Math.min(car.maxForwardSpeed, fwd + car.acceleration * dt);
-      } else if (c.brake) {
-        fwd =
-          fwd > 0
-            ? Math.max(0, fwd - car.braking * dt)
-            : Math.max(-car.maxReverseSpeed, fwd - car.acceleration * dt);
-      } else {
-        fwd = approach(fwd, 0, car.coastDecel * dt);
-      }
-      // Lateral: steer along the car's local right (surface tangent), grip otherwise.
-      const steer =
-        (c.steerRight || c.rollRight ? 1 : 0) - (c.steerLeft || c.rollLeft ? 1 : 0);
-      const lat = v.x * right.x + v.y * right.y;
-      // Momentum carried in from flight (e.g. falling onto a wall) is gripped away quickly.
-      // Braking sideways motion (excess speed or moving against the steering) uses the strong grip.
-      const target = steer * car.steerSpeed;
-      const braking = Math.abs(lat) > car.steerSpeed + 0.5 || (Math.abs(lat) > 0.5 && Math.sign(lat) !== Math.sign(target));
-      let newLat = approach(lat, target, (braking ? car.landingGrip : car.steerAccel) * dt);
-      // Soft corridor limit: while on a surface, sideways motion never carries the car's body
-      // past the corridor boundary (flight momentum still can). Prevents clipping the leading
-      // edge of side surfaces and driving off the side by accident.
+    if (this.mode !== 'airborne' && n) {
+      // A/D alone steer along the surface. Roll keys never request lateral force.
+      const tangent = { x: n.y, y: -n.x, z: 0 };
+      const steer = (c.steerRight ? 1 : 0) - (c.steerLeft ? 1 : 0);
+      const lat = dot(v, tangent);
+      let target = steer * car.steerSpeed;
       const p = this.position;
       const { halfWidth: W, height: H } = CONFIG.corridor;
-      const alongX = Math.abs(right.x) > 0.7;
-      const off = alongX ? p.x * Math.sign(right.x) : (p.y - H / 2) * Math.sign(right.y); // + = toward car-right side
+      const alongX = Math.abs(tangent.x) > 0.7;
+      const offset = alongX ? p.x * Math.sign(tangent.x) : (p.y - H / 2) * Math.sign(tangent.y);
       const limit = (alongX ? W : H / 2) - car.halfExtents.x;
-      if ((off > limit && newLat > 0) || (off < -limit && newLat < 0)) newLat = 0;
-      const dLat = newLat - lat;
-      v.x += right.x * dLat;
-      v.y += right.y * dLat;
-    }
-    // Thrusters share one tank; each active thruster burns 1 unit/s.
-    const active = (c.thrust ? 1 : 0) + (c.forwardThrust ? 1 : 0);
-    const power = fuel.consume(dt, active);
-    this.liftThrust = c.thrust ? power : 0;
-    this.forwardThrust = c.forwardThrust ? power : 0;
-    if (this.liftThrust > 0) {
-      const { up } = carAxes(this.roll);
-      const dv = CONFIG.thrusters.liftAccel * dt * this.liftThrust;
-      v.x += up.x * dv;
-      v.y += up.y * dv;
-    }
-    if (this.forwardThrust > 0 && fwd < CONFIG.thrusters.maxBoostSpeed) {
-      fwd = Math.min(CONFIG.thrusters.maxBoostSpeed, fwd + CONFIG.thrusters.forwardAccel * dt * this.forwardThrust);
+      // Brake through tyre grip before reaching the corridor edge, without clipping velocity.
+      const stopDistance = lat * lat / (2 * car.landingGrip) + 0.08;
+      if ((offset + stopDistance > limit && target > 0) || (offset - stopDistance < -limit && target < 0)) target = 0;
+      const opposing = Math.abs(lat) > car.steerSpeed || lat * target <= 0;
+      const maxGrip = opposing ? car.landingGrip : car.steerAccel;
+      const lateralAccel = clamp((target - lat) * car.gripGain, -maxGrip, maxGrip);
+      acceleration.x += tangent.x * lateralAccel;
+      acceleration.y += tangent.y * lateralAccel;
     }
 
-    // Suction: attraction toward the faced surface, or holding the car on it once attached.
-    const n = this.probe?.normal;
+    acceleration.x += up.x * CONFIG.thrusters.liftAccel * this.liftThrust;
+    acceleration.y += up.y * CONFIG.thrusters.liftAccel * this.liftThrust;
+
     if (n && suction.state === 'attracting') {
-      const pull = suction.pull * dt * (1 - this.liftThrust); // thrusting away overrides the pull
-      v.x -= n.x * pull;
-      v.y -= n.y * pull;
-      // Limit approach speed so the car is drawn in smoothly rather than slammed.
-      const toward = -(v.x * n.x + v.y * n.y);
-      const max = CONFIG.suction.maxApproachSpeed;
-      if (toward > max) {
-        v.x += n.x * (toward - max);
-        v.y += n.y * (toward - max);
-      }
-    } else if (n && this.mode === 'attached' && this.probe!.gap > 0.02) {
-      // Gravity is disabled while attached (see below); press gently into the surface instead
-      // so the car can drive on walls and ceilings.
-      const press = CONFIG.suction.pressAccel * dt * (1 - this.liftThrust);
-      v.x -= n.x * press;
-      v.y -= n.y * press;
+      const toward = -dot(v, n);
+      // A bounded attraction/damping force replaces the old approach-speed clamp.
+      const desired = Math.min(CONFIG.suction.maxApproachSpeed, Math.sqrt(2 * suction.pull * Math.max(0, this.probe!.gap)));
+      const pull = clamp((desired - toward) * car.suctionApproachGain, -CONFIG.suction.maxAttractAccel, suction.pull);
+      acceleration.x -= n.x * pull * (1 - this.liftThrust);
+      acceleration.y -= n.y * pull * (1 - this.liftThrust);
+    } else if (n && this.mode === 'attached') {
+      // Finite spring/damper pressure keeps attachment stable through slab seams.
+      const press = clamp(this.probe!.gap * car.contactSpring + dot(v, n) * car.contactDamping,
+        -CONFIG.suction.pressAccel, CONFIG.suction.pressAccel);
+      acceleration.x -= n.x * press * (1 - this.liftThrust);
+      acceleration.y -= n.y * press * (1 - this.liftThrust);
     }
-    // Suction never drags the car through the surface plane: when the wheels are already at the
-    // plane, motion further into it is removed (matters at surface ends, where part of the car
-    // hangs over a gap and only some probe rays still see the surface).
-    if (n && this.suctionOn && this.probe!.gap < 0.05) {
-      const into = -(v.x * n.x + v.y * n.y);
-      if (into > 0) {
-        v.x += n.x * into;
-        v.y += n.y * into;
-      }
-    }
-
-    v.z = -fwd;
-    this.body.setLinvel(v, true);
+    this.body.addForce({ x: acceleration.x * mass, y: acceleration.y * mass, z: acceleration.z * mass }, true);
     this.body.setGravityScale(
       this.mode === 'attached' ? 0 : suction.state === 'attracting' ? CONFIG.suction.attractGravityScale : 1,
       true,
     );
 
-    if (this.mode !== 'airborne') {
-      this.stabilizeRoll(this.probe!.normal);
+    const input = power > 0 ? requestedRoll : 0;
+    const w = this.body.angvel().z;
+    let contact = false;
+    this.world.contactPairsWith(this.collider, (other) => {
+      this.world.contactPair(this.collider, other, (manifold) => {
+        if (manifold.numSolverContacts() > 0) contact = true;
+      });
+    });
+    let angularAccel: number;
+    const limit = contact ? car.contactRollAccel : car.rollAccel;
+    if (input) {
+      // Pure torque has zero net linear force. The solver provides ground resistance and
+      // pivot motion; enough sustained torque can tip the car without an artificial hop.
+      angularAccel = clamp((input * car.rollSpeed - w) * car.rollInputGain, -limit, limit) * power;
     } else {
-      // Barrel roll about the longitudinal axis. Left arrow rolls the roof to the left.
-      const input = (c.rollLeft ? 1 : 0) - (c.rollRight ? 1 : 0);
-      const w = this.body.angvel().z;
-      let nw: number;
-      if (input !== 0) {
-        nw = approach(w, input * car.rollSpeed, car.rollAccel * dt);
-        this.popOffContacts();
-      } else {
-        // Released: brake the spin firmly so 90°/180° rolls are controllable...
-        nw = approach(w, 0, car.rollBrake * dt);
-        // ...and, once nearly stopped, settle onto the nearest surface-facing orientation.
-        let target: number | null = null;
-        if (suction.state === 'attracting' && n) {
-          target = Math.atan2(-n.x, n.y); // wheels flat onto the surface being pulled toward
-        } else if (Math.abs(nw) < 1.5) {
-          const quarter = Math.round(this.roll / (Math.PI / 2)) * (Math.PI / 2);
-          if (Math.abs(wrapAngle(quarter - this.roll)) < (car.rollAssistAngleDeg * Math.PI) / 180) target = quarter;
-        }
-        if (target !== null) {
-          const err = wrapAngle(target - this.roll);
-          nw = approach(nw, clamp(err * car.rollAssistGain, -car.rollSpeed, car.rollSpeed), car.rollAccel * dt);
-        }
+      let target: number | null = null;
+      if (this.mode !== 'airborne' && n) target = Math.atan2(-n.x, n.y);
+      else if (suction.state === 'attracting' && n) target = Math.atan2(-n.x, n.y);
+      else if (Math.abs(w) < 1.5) {
+        const quarter = Math.round(this.roll / (Math.PI / 2)) * (Math.PI / 2);
+        if (Math.abs(wrapAngle(quarter - this.roll)) < car.rollAssistAngleDeg * Math.PI / 180) target = quarter;
       }
-      this.body.setAngvel({ x: 0, y: 0, z: nw }, true);
+      const targetW = target === null ? 0 : clamp(wrapAngle(target - this.roll) * car.rollAssistGain, -car.rollSpeed, car.rollSpeed);
+      angularAccel = clamp((targetW - w) * car.rollDamping, -car.rollBrake, car.rollBrake);
     }
+    this.rollLeftThrust = input > 0 ? Math.max(0.2 * power, Math.max(0, angularAccel) / limit) : 0;
+    this.rollRightThrust = input < 0 ? Math.max(0.2 * power, Math.max(0, -angularAccel) / limit) : 0;
+    const inertia = this.body.effectiveAngularInertia().m33;
+    this.body.addTorque({ x: 0, y: 0, z: inertia * angularAccel }, true);
   }
 
-  /**
-   * The car body is wider than it is tall, so it cannot rotate while its roof or a side lies
-   * against a surface. When the player rolls in that situation, push the car off the surface
-   * just enough to turn (self-righting), instead of leaving it stuck.
-   */
-  private popOffContacts() {
-    const he = CONFIG.car.halfExtents;
-    const { up, right } = carAxes(this.roll);
-    const p = this.position;
-    const v = this.body.linvel();
-    let changed = false;
-    const dirs = [
-      { d: up, reach: he.y },
-      { d: right, reach: he.x },
-      { d: { x: -right.x, y: -right.y, z: 0 }, reach: he.x },
-    ];
-    for (const { d, reach } of dirs) {
-      const hit = this.world.castRayAndGetNormal(
-        new RAPIER.Ray(p, d), reach + 0.12, true, undefined, undefined, this.collider, this.body,
-      );
-      if (!hit) continue;
-      const n = hit.normal;
-      const vn = v.x * n.x + v.y * n.y;
-      const pop = CONFIG.car.rollPopSpeed * (n.y > 0.7 ? 1 : 0.7);
-      if (vn < pop) {
-        v.x += n.x * (pop - vn);
-        v.y += n.y * (pop - vn);
-        changed = true;
-      }
-    }
-    if (changed) this.body.setLinvel(v, true);
-  }
-
-  /** Rotates the car so its wheels sit flat on the surface with the given normal. */
-  private stabilizeRoll(normal: Vec3) {
-    const target = Math.atan2(-normal.x, normal.y);
-    const err = wrapAngle(target - this.roll);
-    const w = clamp(err * CONFIG.suction.stabilizeGain, -CONFIG.car.rollSpeed * 2, CONFIG.car.rollSpeed * 2);
-    this.body.setAngvel({ x: 0, y: 0, z: w }, true);
-  }
-
-  /**
-   * Called after world.step(). While supported and not thrusting away, removes any velocity
-   * pushing the car off the surface: collision solvers can kick bodies at internal slab edges,
-   * and an arcade car should hug the road instead.
-   */
-  afterStep(c: ControlState) {
-    if (this.mode !== 'airborne' && this.probe && !c.thrust) {
-      const n = this.probe.normal;
-      const v = this.body.linvel();
-      const vn = dot(v, n);
-      if (vn > 0) this.body.setLinvel({ x: v.x - n.x * vn, y: v.y - n.y * vn, z: v.z - n.z * vn }, true);
-      // Hard landings can sink the car slightly into the surface (the solver only resolves
-      // penetration gradually). Lift it back onto the plane right away so it can't catch the
-      // edge of the next slab while sunk.
-      const after = this.probeSurface(0.2);
-      if (after && after.gap < -0.03 && after.alignment > 0.7) {
-        const p = this.position;
-        const k = -after.gap;
-        this.body.setTranslation({ x: p.x + after.normal.x * k, y: p.y + after.normal.y * k, z: p.z }, true);
-      }
-    }
+  /** Observe the solver result without rewriting position, rotation, or momentum. */
+  afterStep(_c: ControlState) {
+    this.surfaceQueriesDirty = false;
     this.forwardSpeed = -this.body.linvel().z;
   }
 }

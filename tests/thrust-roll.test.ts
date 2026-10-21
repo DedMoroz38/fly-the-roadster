@@ -33,34 +33,31 @@ describe('thrusters', () => {
     expect(sim.vehicle.body.linvel().y).toBeCloseTo(vy0 - CONFIG.gravity * 0.5, 0);
   });
 
-  it('no fuel is consumed without thrust input, and thrust is independent of driving', async () => {
+  it('automatic cruise is free, and lift works alongside fuel-backed acceleration', async () => {
     const sim = await makeSim(longFloor);
-    run(sim, 1, { accelerate: true });
+    run(sim, 1);
     expect(sim.fuel.value).toBe(CONFIG.fuel.capacity);
     run(sim, 0.3, { accelerate: true, thrust: true });
     expect(sim.vehicle.position.y).toBeGreaterThan(0.6);
     expect(sim.vehicle.forwardSpeed).toBeGreaterThan(20);
   });
 
-  it('ArrowUp forward thruster accelerates beyond driving top speed, same fuel rate', async () => {
-    const sim = await makeSim(longFloor);
-    run(sim, 3, { accelerate: true });
-    expect(sim.vehicle.forwardSpeed).toBeCloseTo(CONFIG.car.maxForwardSpeed, 0);
-    run(sim, 1, { accelerate: true, forwardThrust: true });
-    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(CONFIG.car.maxForwardSpeed + 10);
-    expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - 1, 1);
+  it('automatically moves forward in flight and W supplies fuel-backed bounded extra acceleration', async () => {
+    const sim = await makeSim([], { x: 0, y: 500, z: -10 });
+    run(sim, 3);
+    expect(sim.vehicle.forwardSpeed).toBeCloseTo(CONFIG.car.cruiseSpeed, 1);
+    run(sim, 2, { accelerate: true });
+    expect(sim.vehicle.forwardSpeed).toBeCloseTo(CONFIG.car.maxForwardSpeed, 1);
+    expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - 2 * CONFIG.thrusters.boostFuelRate, 5);
   });
 
-  it('forward thruster works in the air', async () => {
-    const sim = await makeSim([], { x: 0, y: 5, z: -10 });
-    run(sim, 0.5, { forwardThrust: true });
-    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(8);
-  });
-
-  it('both thrusters together burn fuel twice as fast', async () => {
-    const sim = await makeSim([], { x: 0, y: 5, z: -10 });
-    run(sim, 1, { forwardThrust: true, thrust: true });
-    expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - 2, 1);
+  it('applies lift as force without rewriting existing forward or sideways momentum', async () => {
+    const sim = await makeSim([], { x: 0, y: 500, z: -10 });
+    sim.vehicle.body.setLinvel({ x: 7, y: 2, z: -40 }, true);
+    run(sim, 1 / 60, { thrust: true });
+    expect(sim.vehicle.body.linvel().x).toBeCloseTo(7, 4);
+    expect(sim.vehicle.body.linvel().y).toBeCloseTo(2 + (CONFIG.thrusters.liftAccel - CONFIG.gravity) / 60, 3);
+    expect(sim.vehicle.forwardSpeed).toBeGreaterThan(39.9);
   });
 
   it('thrust pushes away from the wheels: upside down it pushes downward', async () => {
@@ -94,6 +91,32 @@ describe('barrel roll', () => {
     return total;
   }
 
+  it('arrow input applies roll torque with zero direct lateral or vertical thrust', async () => {
+    for (const left of [true, false]) {
+      const sim = await makeSim([], { x: 0, y: 500, z: -10 });
+      run(sim, 1 / 60, { rollLeft: left, rollRight: !left });
+      expect(sim.vehicle.body.linvel().x).toBeCloseTo(0, 6);
+      expect(sim.vehicle.position.x).toBeCloseTo(0, 6);
+      expect(sim.vehicle.body.linvel().y).toBeCloseTo(-CONFIG.gravity / 60, 5);
+      expect(sim.vehicle.body.angvel().z * (left ? 1 : -1)).toBeGreaterThan(0);
+      expect(left ? sim.vehicle.rollLeftThrust : sim.vehicle.rollRightThrust).toBeGreaterThan(0);
+      expect(left ? sim.vehicle.rollRightThrust : sim.vehicle.rollLeftThrust).toBe(0);
+    }
+  });
+
+  it('floor contact resists the initial tilt and sustained torque can tip the car', async () => {
+    const floor = await makeSim(longFloor);
+    const air = await makeSim([], { x: 0, y: 500, z: -10 });
+    run(floor, 0.5);
+    run(floor, 0.15, { rollLeft: true });
+    run(air, 0.15, { rollLeft: true });
+    expect(floor.vehicle.roll).toBeGreaterThan(0.01);
+    expect(floor.vehicle.roll).toBeLessThan(air.vehicle.roll);
+    expect(floor.vehicle.position.y).toBeLessThan(0.65);
+    const total = trackRoll(floor, 3, { rollLeft: true });
+    expect(total).toBeGreaterThan(Math.PI);
+  });
+
   it('left arrow performs a full 360° roll (positive about +Z) while airborne', async () => {
     const sim = await makeSim([], { x: 0, y: 500, z: -10 });
     const total = trackRoll(sim, 2, { rollLeft: true });
@@ -123,14 +146,14 @@ describe('barrel roll', () => {
   it('settles onto the nearest 90° orientation when released close to it', async () => {
     const sim = await makeSim([], { x: 0, y: 500, z: -10 });
     // Tap left until ~80°, release.
-    while (sim.vehicle.roll < (75 * Math.PI) / 180) run(sim, 1 / 60, { rollLeft: true });
+    for (let i = 0; i < 180 && sim.vehicle.roll < (75 * Math.PI) / 180; i++) run(sim, 1 / 60, { rollLeft: true });
     run(sim, 1);
     expect(Math.abs(wrapAngle(sim.vehicle.roll - Math.PI / 2))).toBeLessThan(0.02);
   });
 
   it('holds an arbitrary angle far from 90° multiples (free rotation, no forced snapping)', async () => {
     const sim = await makeSim([], { x: 0, y: 500, z: -10 });
-    while (sim.vehicle.roll < (20 * Math.PI) / 180) run(sim, 1 / 60, { rollLeft: true });
+    for (let i = 0; i < 180 && sim.vehicle.roll < (20 * Math.PI) / 180; i++) run(sim, 1 / 60, { rollLeft: true });
     run(sim, 1);
     const r = sim.vehicle.roll;
     expect(r).toBeGreaterThan((30 * Math.PI) / 180);
@@ -164,7 +187,6 @@ describe('barrel roll', () => {
         rollLeft: t % 2 < 0.7,
         rollRight: t % 3 > 2.2,
         steerLeft: t % 1.3 < 0.4,
-        forwardThrust: t > 4,
       });
       const q = sim.vehicle.body.rotation();
       maxOff = Math.max(maxOff, Math.abs(q.x), Math.abs(q.y));
@@ -200,15 +222,16 @@ describe('self-righting', () => {
     expect(sim.vehicle.mode).toBe('grounded');
   });
 
-  it('rolling away from a wall after releasing suction is quick (no grinding against it)', async () => {
-    const sim = await makeSim([{ surface: 'left', d0: -20, d1: 500 }], { x: -2, y: 8, z: -10 });
+  it('can roll away from a wall after releasing suction without an artificial hop', async () => {
+    const sim = await makeSim([{ surface: 'left', d0: -20, d1: 500 }], { x: -4, y: 8, z: -10 });
     sim.vehicle.body.setRotation({ x: 0, y: 0, z: Math.sin(-Math.PI / 4), w: Math.cos(-Math.PI / 4) }, true);
-    sim.step({ ...(await import('./helpers')).controls({ toggleSuction: true }) });
-    run(sim, 1);
+    sim.step({ ...(await import('./helpers')).controls({ suction: true }) });
+    run(sim, 1, { suction: true });
     expect(sim.vehicle.mode).toBe('attached');
-    sim.step((await import('./helpers')).controls({ toggleSuction: true }));
+    sim.step((await import('./helpers')).controls({ suction: false }));
     const t0 = sim.time;
     while (Math.abs(wrapAngle(sim.vehicle.roll - Math.PI)) > 0.3 && sim.time - t0 < 3) run(sim, 1 / 60, { rollRight: true });
-    expect(sim.time - t0).toBeLessThan(0.75);
+    expect(sim.time - t0).toBeLessThan(3);
+    expect(Math.abs(wrapAngle(sim.vehicle.roll - Math.PI))).toBeLessThan(0.3);
   });
 });

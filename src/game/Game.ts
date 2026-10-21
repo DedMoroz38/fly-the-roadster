@@ -2,6 +2,9 @@ import { FixedStepper } from '../core/fixedStep';
 import { InputManager } from './input';
 import { Simulation, initPhysics } from './simulation';
 import { Course } from './course/course';
+import { WorkerChunkSource } from './course/workerSource';
+import { SCENARIOS } from './course/routeGenerator';
+import type { ScenarioKind } from './course/planner';
 import { GameSession, SessionSnapshot } from './session';
 import { GameRenderer } from '../render/gameRenderer';
 
@@ -27,13 +30,30 @@ export class Game {
     return q !== null && q !== '' && !Number.isNaN(Number(q)) ? Number(q) >>> 0 : (Math.random() * 2 ** 32) >>> 0;
   })();
 
+  private terrainSource: WorkerChunkSource | null = null;
+
   constructor(private host: HTMLElement) {}
 
   async start() {
     await initPhysics();
     if (this.disposed) return;
+    const query = new URLSearchParams(window.location.search);
+    const requested = query.get('template') as ScenarioKind | null;
+    const template = requested && SCENARIOS.includes(requested) ? requested : undefined;
+    const initialSource = new WorkerChunkSource(this.seed, { template });
+    this.terrainSource = initialSource;
+    try { await initialSource.ready; }
+    catch (error) { initialSource.dispose(); if (!this.disposed) throw error; return; }
+    if (this.disposed) { initialSource.dispose(); return; }
     this.renderer = new GameRenderer(this.host);
-    this.session = new GameSession(this.seed, (seed) => new Simulation({ createLevel: (w) => new Course(w, seed) }));
+    let first = true;
+    this.session = new GameSession(this.seed, (seed) => new Simulation({ createLevel: (w) => {
+      const source = first ? initialSource : initialSource.restartSource();
+      first = false;
+      this.terrainSource = source;
+      return new Course(w, seed, { template, source });
+    } }));
+    this.session.debugEnabled = query.get('debug') === '1';
     this.stepper = new FixedStepper(this.session.sim.dt);
     this.detachInput = this.input.attach(window);
     window.addEventListener('resize', this.onResize);
@@ -95,9 +115,14 @@ export class Game {
       else this.togglePause();
     }
     if (this.input.consumePress('help')) this.toggleHelp();
+    if (this.input.consumePress('debug')) { s.debugEnabled = !s.debugEnabled; this.emit(true); }
 
     const before = s.state;
-    const steps = this.stepper.advance(dt);
+    const course = s.sim.level as Course;
+    course.update(s.sim.distance);
+    const waiting = course.needsBuffer(s.sim.distance);
+    if (waiting) this.stepper.reset();
+    const steps = waiting ? 0 : this.stepper.advance(dt);
     for (let i = 0; i < steps; i++) s.step(this.input.sample());
     if (s.state !== 'running') this.input.consumePress('suction'); // don't queue toggles while stopped
 
@@ -105,8 +130,9 @@ export class Game {
       this.renderer.reset();
       this.renderedAttempt = s.attempt;
     }
-    const alpha = s.state === 'running' ? this.stepper.alpha : 1;
-    this.renderer.render(s.sim, alpha, s.state === 'running' ? dt : 0, dt);
+    const alpha = s.state === 'running' && !waiting ? this.stepper.alpha : 1;
+    this.renderer.debugEnabled = s.debugEnabled;
+    this.renderer.render(s.sim, alpha, s.state === 'running' && !waiting ? dt : 0, dt);
     this.emit(before !== s.state);
     this.raf = requestAnimationFrame(this.frame);
   };
@@ -118,6 +144,7 @@ export class Game {
     window.removeEventListener('resize', this.onResize);
     window.removeEventListener('blur', this.onBlur);
     this.session?.sim.dispose();
+    this.terrainSource?.dispose();
     this.renderer?.dispose();
     this.listeners.clear();
   }

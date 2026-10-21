@@ -10,6 +10,11 @@ export class CarModel {
   private wheels: THREE.Mesh[] = [];
   private liftFlames: THREE.Mesh[] = [];
   private rearFlames: THREE.Mesh[] = [];
+  private rollThrusters: {
+    flames: THREE.Mesh[];
+    flameMat: THREE.MeshBasicMaterial;
+    nozzleMat: THREE.MeshStandardMaterial;
+  }[] = [];
   private suctionRing: THREE.Mesh;
   private suctionMat: THREE.MeshBasicMaterial;
   private accentMat: THREE.MeshStandardMaterial;
@@ -91,6 +96,7 @@ export class CarModel {
       color: 0x66e0ff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
     });
     const flameGeo = new THREE.ConeGeometry(0.16, 1, 10, 1, true);
+    flameGeo.rotateZ(Math.PI);
     flameGeo.translate(0, -0.5, 0); // base at origin, tip at local -Y (out of the wheel side)
     for (const x of [-0.5, 0.5]) {
       for (const z of [-0.9, 0.9]) {
@@ -108,6 +114,45 @@ export class CarModel {
       f.rotation.x = -Math.PI / 2; // tip toward +Z (behind the car)
       this.group.add(f);
       this.rearFlames.push(f);
+    }
+
+    // Roll uses a force couple: opposite vertical jets at both sides, balanced
+    // front/rear. Left roll lifts the right side, so its exhaust points down on
+    // the right and up on the left. These rotate with the car's local frame.
+    const rollFlameGeo = new THREE.ConeGeometry(0.14, 1, 10, 1, true);
+    rollFlameGeo.rotateZ(Math.PI);
+    rollFlameGeo.translate(0, -0.5, 0);
+    const nozzleGeo = new THREE.CylinderGeometry(0.16, 0.12, 0.14, 10, 1, true);
+    for (const [index, control] of ['left', 'right'].entries()) {
+      const color = index === 0 ? 0xb785ff : 0xff73b5;
+      const flameMat = this.flameMat.clone();
+      flameMat.color.set(color);
+      const nozzleMat = new THREE.MeshStandardMaterial({
+        color: 0x343b4b, metalness: 0.8, roughness: 0.3,
+        emissive: color, emissiveIntensity: 0.12, side: THREE.DoubleSide,
+      });
+      const flames: THREE.Mesh[] = [];
+      for (const side of [-1, 1]) {
+        const exhaustY = index === 0 ? -side : side;
+        const sideName = side < 0 ? 'left' : 'right';
+        const direction = exhaustY > 0 ? 'up' : 'down';
+        for (const z of [-1.42, 1.42]) {
+          const end = z < 0 ? 'front' : 'rear';
+          const nozzle = new THREE.Mesh(nozzleGeo, nozzleMat);
+          nozzle.name = `roll-${control}-nozzle-${sideName}-${direction}-${end}`;
+          nozzle.position.set(side * (he.x + 0.07), exhaustY * 0.2, z);
+          nozzle.rotation.z = exhaustY < 0 ? Math.PI : 0;
+          this.group.add(nozzle);
+
+          const flame = new THREE.Mesh(rollFlameGeo, flameMat);
+          flame.name = `roll-${control}-flame-${sideName}-${direction}-${end}`;
+          flame.position.set(nozzle.position.x, exhaustY * 0.27, z);
+          flame.rotation.z = exhaustY > 0 ? Math.PI : 0;
+          this.group.add(flame);
+          flames.push(flame);
+        }
+      }
+      this.rollThrusters.push({ flames, flameMat, nozzleMat });
     }
 
     // Suction emitter ring under the car.
@@ -135,6 +180,7 @@ export class CarModel {
     this.group.add(this.thrustLight);
 
     this.setThrust(0, 0);
+    this.setRollThrust(0, 0);
     this.group.traverse((o) => {
       if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;
     });
@@ -158,6 +204,22 @@ export class CarModel {
     for (const f of this.rearFlames) {
       f.visible = forward > 0;
       f.scale.set(1.3, 0.6 + forward * (1.4 + 0.3 * Math.sin(this.time * 55 + f.position.x * 5)), 1.3);
+    }
+  }
+
+  /** Independent roll channels; inputs reflect the vehicle's applied thrust. */
+  setRollThrust(left: number, right: number) {
+    for (const [index, thrust] of [left, right].entries()) {
+      const intensity = THREE.MathUtils.clamp(thrust, 0, 1);
+      const { flames, flameMat, nozzleMat } = this.rollThrusters[index];
+      flameMat.opacity = intensity * 0.9;
+      nozzleMat.emissiveIntensity = 0.12 + intensity * 2.6;
+      for (const flame of flames) {
+        flame.visible = intensity > 0;
+        const flicker = Math.sin(this.time * 57 + flame.position.z * 4);
+        const width = 0.65 + intensity * 0.55;
+        flame.scale.set(width, intensity * (1.15 + flicker * 0.18), width);
+      }
     }
   }
 

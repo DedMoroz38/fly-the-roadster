@@ -57,7 +57,7 @@ export const LEAD_BEVEL = 3;
 
 /**
  * Slabs up to this length are a single convex piece (no internal seams). Longer slabs (only
- * used by tests/debug levels; the course splits runs at 400 m) get a convex lead piece plus a
+ * used by recovery roads and debug levels) get a convex lead piece plus a
  * box, because one very long thin hull loses precision.
  */
 export const MAX_HULL_LENGTH = 450;

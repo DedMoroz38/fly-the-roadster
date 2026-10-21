@@ -15,8 +15,15 @@ export class PickupView {
   private bursts: { mesh: THREE.Mesh; age: number }[] = [];
   private known = new Map<number, { x: number; y: number; d: number; surface: string }>();
   private time = 0;
+  private originDistance = 0;
 
-  sync(level: Level, carDistance?: number) {
+  sync(level: Level, carDistance?: number, originDistance = 0) {
+    if (originDistance !== this.originDistance) {
+      const delta = originDistance - this.originDistance;
+      for (const [id, mesh] of this.items) mesh.position.z = originDistance - this.known.get(id)!.d;
+      for (const burst of this.bursts) burst.mesh.position.z += delta;
+      this.originDistance = originDistance;
+    }
     const active = level.activePickups;
     if (!active) return;
     for (const [id, obj] of this.items) {
@@ -50,7 +57,7 @@ export class PickupView {
       }
       g.add(beam);
       this.known.set(p.id, { x: p.x, y: p.y, d: p.d, surface: s ?? '' });
-      g.position.set(p.x, p.y, -p.d);
+      g.position.set(p.x, p.y, originDistance - p.d);
       this.group.add(g);
       this.items.set(p.id, g);
     }
@@ -90,5 +97,23 @@ export class PickupView {
     for (const obj of this.items.values()) this.group.remove(obj);
     this.items.clear();
     this.known.clear();
+    for (const burst of this.bursts) {
+      this.group.remove(burst.mesh);
+      (burst.mesh.material as THREE.Material).dispose();
+    }
+    this.bursts = [];
+    this.time = 0;
+    this.originDistance = 0;
+  }
+
+  dispose() {
+    this.clear();
+    this.coreGeo.dispose();
+    this.ringGeo.dispose();
+    this.beamGeo.dispose();
+    this.burstGeo.dispose();
+    this.coreMat.dispose();
+    this.ringMat.dispose();
+    this.beamMat.dispose();
   }
 }

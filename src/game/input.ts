@@ -1,9 +1,7 @@
 /** Logical game actions decoupled from physical keys. */
 export type Action =
   | 'accelerate'
-  | 'brake'
   | 'thrust'
-  | 'forwardThrust'
   | 'rollLeft'
   | 'rollRight'
   | 'steerLeft'
@@ -11,13 +9,13 @@ export type Action =
   | 'suction'
   | 'restart'
   | 'pause'
-  | 'help';
+  | 'help'
+  | 'debug';
 
 export const KEY_BINDINGS: Record<string, Action> = {
   KeyW: 'accelerate',
-  KeyS: 'brake',
   Space: 'thrust',
-  ArrowUp: 'forwardThrust',
+  ArrowUp: 'accelerate',
   ArrowLeft: 'rollLeft',
   ArrowRight: 'rollRight',
   KeyA: 'steerLeft',
@@ -26,32 +24,29 @@ export const KEY_BINDINGS: Record<string, Action> = {
   KeyR: 'restart',
   Escape: 'pause',
   KeyH: 'help',
+  F3: 'debug',
 };
 
 /** Snapshot consumed by the simulation each fixed step. */
 export interface ControlState {
   accelerate: boolean;
-  brake: boolean;
   thrust: boolean;
-  forwardThrust: boolean;
   rollLeft: boolean;
   rollRight: boolean;
   steerLeft: boolean;
   steerRight: boolean;
-  /** Edge-triggered: true for exactly one consumed snapshot per key press. */
-  toggleSuction: boolean;
+  /** Held E: active on every snapshot until key release or input clear. */
+  suction: boolean;
 }
 
 export const emptyControls = (): ControlState => ({
   accelerate: false,
-  brake: false,
   thrust: false,
-  forwardThrust: false,
   rollLeft: false,
   rollRight: false,
   steerLeft: false,
   steerRight: false,
-  toggleSuction: false,
+  suction: false,
 });
 
 /**
@@ -60,12 +55,16 @@ export const emptyControls = (): ControlState => ({
  */
 export class InputManager {
   private held = new Set<Action>();
+  private keys = new Set<string>();
+  private blockedUntilRelease = new Set<string>();
   private pressed = new Set<Action>();
 
   keyDown(code: string, repeat = false): boolean {
     const action = KEY_BINDINGS[code];
     if (!action) return false;
+    if (this.blockedUntilRelease.has(code)) return true;
     if (!repeat && !this.held.has(action)) this.pressed.add(action);
+    this.keys.add(code);
     this.held.add(action);
     return true;
   }
@@ -73,12 +72,24 @@ export class InputManager {
   keyUp(code: string): boolean {
     const action = KEY_BINDINGS[code];
     if (!action) return false;
-    this.held.delete(action);
+    this.blockedUntilRelease.delete(code);
+    this.keys.delete(code);
+    if (![...this.keys].some((key) => KEY_BINDINGS[key] === action)) this.held.delete(action);
     return true;
   }
 
   /** Releases everything (e.g. on window blur, so keys don't get stuck). */
   clear() {
+    this.blockedUntilRelease.clear();
+    this.keys.clear();
+    this.held.clear();
+    this.pressed.clear();
+  }
+
+  /** Menu/start inputs cannot become gameplay inputs until their physical keys are released. */
+  clearUntilRelease() {
+    for (const key of this.keys) this.blockedUntilRelease.add(key);
+    this.keys.clear();
     this.held.clear();
     this.pressed.clear();
   }
@@ -94,18 +105,16 @@ export class InputManager {
     return had;
   }
 
-  /** Builds the control snapshot for one simulation step (consumes the suction toggle). */
+  /** Builds the held control snapshot for one simulation step. */
   sample(): ControlState {
     return {
       accelerate: this.held.has('accelerate'),
-      brake: this.held.has('brake'),
       thrust: this.held.has('thrust'),
-      forwardThrust: this.held.has('forwardThrust'),
       rollLeft: this.held.has('rollLeft'),
       rollRight: this.held.has('rollRight'),
       steerLeft: this.held.has('steerLeft'),
       steerRight: this.held.has('steerRight'),
-      toggleSuction: this.consumePress('suction'),
+      suction: this.held.has('suction'),
     };
   }
 
