@@ -16,8 +16,9 @@ npm run build      # typecheck + production build
 ```
 
 Tested with Node 22.23.4. The long-distance generation test can take about a minute.
-After the initial terrain buffer is validated in a Web Worker, the main menu displays a spinning
-3D roadster. Press Space or click the car to start. The world stays stopped until then; the start
+After the first 400 m of terrain are validated in a Web Worker (generation continues behind the
+menu), the main menu displays a 3D roadster on a turntable. It keeps spinning with reduced motion
+enabled, just slower and without bobbing. Press Space or click the car to start. The world stays stopped until then; the start
 keypress is consumed so it cannot also fire the lift thrusters.
 
 ## Controls
@@ -57,17 +58,21 @@ Accepted exit states feed the next candidate. Failed candidates have bounded ret
 validated recovery-road fallback. No controller drives the player's car; validation inputs stay in the
 worker and tests.
 
-Supported procedural families are normal road, short flight gap, ceiling crossing, either wall,
-multiple surface transitions, and extended surface-free flight. Seeded obstacles mount on floors,
-ceilings and both walls, including the opening road. Their physical colliders are part of world
-generation: placement respects the intended route and reaction margins, then the complete decorated
-chunk is replayed and validated again. Unreachable additions are rejected.
-Logarithmic difficulty changes bounded gaps, challenge frequency and combinations. Regular recovery
-roads provide cooling and reachable fuel cells.
-The default opening road is 160–180 m and leads into two requested challenge chunks. On tested
-seeds 1/42/233, the first maneuver arrives after roughly 11–13 seconds at cruise speed. Difficulty
-values over the first kilometre are now 50% higher than the previous tuning (about 28% at 500 m and
-42% at 1 km). The curve continues increasing afterward; later recovery sections keep their full duration.
+Supported procedural families are floor runs, short flight gaps, ceiling crossings, either wall,
+ceiling-to-wall transitions (mirrored to either wall), and extended surface-free flight. Seeded
+obstacles mount on floors, ceilings and both walls, including the opening road. Their physical
+colliders are part of world generation: placement respects the intended route and reaction margins,
+then the complete decorated chunk is replayed and validated again. Unreachable additions are rejected.
+
+Pacing keeps the car off plain floor for most of a run. Floor runs are slaloms: the certified route
+weaves between lanes and obstacles fill the centre lanes it vacates, so A/D steering is required.
+The 2 s reaction interval is measured from the latest touchdown, carried across chunk boundaries,
+so lead-ins are only as long as that interval needs. Recovery after a maneuver is 2 s at top speed,
+and wall/ceiling traversals are 150–210 m. On seeds 1/42/233/7/19 over 4 km, plain floor is 32–41%
+of route time (plus 6–11% slalom), versus 71–81% floor before this tuning.
+The opening road is 110–130 m and leads into two requested challenge chunks; the first maneuver
+arrives after roughly 6–7.5 seconds. Difficulty values over the first kilometre are 50% higher than
+the earlier tuning (about 28% at 500 m and 42% at 1 km) and keep increasing afterward.
 
 The validation contract includes a minimum 2 s preparation interval, ±0.15 s action/suction timing
 checks, and entry speeds of 24/28/32 m/s. Timing variants allow ordinary steering corrections on

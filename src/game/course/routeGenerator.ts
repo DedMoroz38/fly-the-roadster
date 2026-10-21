@@ -38,12 +38,13 @@ export class ReachableCourseGenerator {
     // Introduce two challenges after the warmup before allowing optional extra recovery.
     if (rng.chance(GENERATOR_CONFIG.easySectionChance) && this.nextId > GENERATOR_CONFIG.openingChallengeChunks) return 'normal';
     const weighted: [ScenarioKind, number][] = [
-      ['gap', 2.6 - difficulty],
-      ['ceiling', 0.8 + difficulty],
-      ['wall-left', 0.8 + difficulty],
-      ['wall-right', 0.8 + difficulty],
+      // Surface challenges dominate; short floor gaps fade out as difficulty rises.
+      ['gap', 1.4 - difficulty * 0.6],
+      ['ceiling', 1.1 + difficulty],
+      ['wall-left', 1.1 + difficulty],
+      ['wall-right', 1.1 + difficulty],
       ['flight', 0.6 + difficulty],
-      ['multiple', 0.2 + difficulty * 2.5],
+      ['multiple', 0.6 + difficulty * 2.5],
     ];
     let choice = rng.next() * weighted.reduce((sum, [, weight]) => sum + weight, 0);
     for (const [kind, weight] of weighted) if ((choice -= weight) <= 0) return kind;

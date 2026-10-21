@@ -58,6 +58,21 @@ describe('terrain worker lifecycle', () => {
     expect(source.drain()).toEqual([]);
   });
 
+  it('becomes ready once the validated opening reaches the start buffer, while generation continues', async () => {
+    const source = createSource();
+    const worker = MockWorker.instances[0];
+    const ready = vi.fn();
+    void source.ready.then(ready);
+    worker.send({ type: 'chunk', chunk: chunk(0, 0, GENERATOR_CONFIG.startBuffer - 1), frontier: GENERATOR_CONFIG.startBuffer - 1 });
+    await Promise.resolve();
+    expect(ready).not.toHaveBeenCalled();
+    worker.send({ type: 'chunk', chunk: chunk(1, GENERATOR_CONFIG.startBuffer - 1, GENERATOR_CONFIG.startBuffer + 150), frontier: GENERATOR_CONFIG.startBuffer + 150 });
+    await source.ready;
+    expect(ready).toHaveBeenCalledOnce();
+    expect(source.drain().map(c => c.id)).toEqual([0, 1]);
+    expect(GENERATOR_CONFIG.startBuffer).toBeLessThan(GENERATOR_CONFIG.generateAhead);
+  });
+
   it('rejects initial worker failure and records a later failure after readiness', async () => {
     const failed = createSource();
     const rejection = expect(failed.ready).rejects.toThrow('cannot initialize');

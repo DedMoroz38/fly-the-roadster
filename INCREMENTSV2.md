@@ -161,19 +161,63 @@ acceleration consumption afterward. All three pickup checks pass on the focused 
 is clean. No additional gameplay changes followed the successful production build/browser checks.
 Confidence ≥95% within the documented route contract. The updated preview remains on port 4173.
 
-## 9. Harder opening, surface obstacles, held suction and main menu — IN PROGRESS
+## 9. Harder opening, surface obstacles, held suction and main menu — DONE
 
-- [ ] Increase opening difficulty by 50% while preserving validated maneuver limits.
-- [ ] Place obstacles on floors, ceilings and both walls inside the world-generation validator.
-- [ ] Replace suction toggle with hold E throughout controls, physics and recorded route validation.
-- [ ] Add a main menu with a spinning 3D roadster; Space or clicking the car starts the run.
-- [ ] Verify these features together before advancing to release checks (≥95% confidence gate).
+- [x] Increase opening difficulty by 50% while preserving validated maneuver limits.
+- [x] Place obstacles on floors, ceilings and both walls inside the world-generation validator.
+- [x] Replace suction toggle with hold E throughout controls, physics and recorded route validation.
+- [x] Add a main menu with a spinning 3D roadster; Space or clicking the car starts the run.
+- [x] Verify these features together before advancing to release checks (≥95% confidence gate).
 
-## 10. Menu and obstacle update verification — NOT STARTED
+`difficultyAt` is exactly 1.5× the previous curve up to 1 km, then keeps increasing below one
+without a step. Decoration mounts obstacles flush on every surface type, including the opening
+road, outside the protected route; the decorated chunk is fully re-replayed (timing, suction and
+entry-speed variants) and dropped if any replay fails. Over the first 25 chunks of seeds 1/42/233,
+every chunk kept its obstacles (3–7 each) with all four surfaces used (e.g. seed 42: floor 50,
+ceiling 29, left 24, right 26). Suction is a held control end to end; overheat while held resumes
+only below recovery heat. The menu freezes the world until Space or a click on the car.
 
-- [ ] Run regression tests, production build and independent review.
-- [ ] Verify the menu, hold/release suction and generated hazards in the browser.
-- [ ] Update documentation and refresh the playable preview.
+## 10. Menu and obstacle update verification — DONE
+
+- [x] Run regression tests and production build (no separate independent review this round).
+- [x] Verify the menu, hold/release suction and generated hazards in the browser.
+- [x] Update documentation and refresh the playable preview.
+
+The 50 km streaming bound still assumed one obstacle per chunk; it now derives from
+`maxObstaclesPerSurface × SURFACES`. A new obstacle test asserts flush mounting on real slabs of
+all four surfaces plus an opening-road floor obstacle. Full run: **207 tests / 24 suites pass**;
+`npm run build` passes. Browser (production preview, seed 42): the menu shows the spinning car with
+sim time frozen at 0; clicking the car starts the run; Space starts it without lift or fuel use;
+held E reads ON with rising heat, release reads OFF and cools; floor, ceiling and both walls show
+obstacles on the opening stretch.
+
+## 11. Less plain floor driving and a spinning menu car — DONE
+
+- [x] Measure where route time goes; cut plain-floor time without weakening validation.
+- [x] Turn floor runs into certified slaloms with obstacles in the vacated lanes.
+- [x] Make the menu car visibly spin, including with reduced motion enabled.
+- [x] Regression tests, production build and browser check.
+
+Baseline (seeds 1/42/233, 4 km): 71–81% of certified route time on the floor. Causes: ~118 m
+lead-ins, 6.5 s (208 m) recovery after every maneuver, and flat 330 m sections every fourth chunk.
+Changes: the reaction interval now runs from the latest touchdown carried across chunks
+(`ReachableState.lastArrival`), so lead-ins are only as long as needed (+10 m margin for timing
+and late landings); recovery 2 s; wall drop pad 20 m; traversals 150–210 m; surface-heavy challenge
+weights; the ceiling-to-wall challenge mirrors to either wall (required surfaces now come from the
+plan's attachments). Floor sections are slaloms whose centre lanes receive 3–4 blocks each. Result
+on seeds 1/42/233/7/19: plain floor 32–41% plus 6–11% slalom; no rejected, fallback or undecorated
+chunks. First maneuver 5.8–7.5 s (was 11–13 s). Generation cost per km is unchanged (~3 s to 1.6 km
+in Node); the menu now appears once 400 m are validated (5.6 s vs 13.7 s in the browser), with the
+existing 64 m `needsBuffer` pause still guarding play.
+
+Test changes, with reasons: the one-world seam check now allows two physics steps; the original code
+measured up to 0.76 m on other seeds and passed only on a lucky seed pair (new max seen 0.95 m,
+~33 ms, inside the ±150 ms contract). The 6 km open-loop replay now bounds each chunk's own drift;
+the cumulative offset random-walks across more, shorter chunks (up to 6.6 m) while every maneuver
+still completes. Streaming bounds derive from configuration instead of fixed numbers. New tests:
+floor share and centre slalom blocks, both mirrored walls, and the start buffer.
+Full run: **210 tests / 24 suites pass**; production build passes. Browser (reduced motion enabled):
+the menu car turns visibly; a slalom run shows centre blocks and "slalom left in 24 m" cues.
 
 ## Evidence / issues
 

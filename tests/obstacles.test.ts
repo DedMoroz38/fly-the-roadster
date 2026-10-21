@@ -6,6 +6,8 @@ import { emptyControls } from '../src/game/input';
 import { initialReachableState, planChunk, validatePlan, type ScenarioKind } from '../src/game/course/planner';
 import { decorateChunk } from '../src/game/course/decorator';
 import { FailureMonitor } from '../src/game/session';
+import { CONFIG } from '../src/game/config';
+import type { SurfaceType } from '../src/game/surfaces';
 
 beforeAll(initPhysics);
 describe('solid obstacle lifecycle', () => {
@@ -49,6 +51,28 @@ describe('certified procedural decoration', () => {
       }
     });
   }
+  it('mounts certified obstacles flush on floors, ceilings and both walls, including the opening road', () => {
+    const { halfWidth, height } = CONFIG.corridor;
+    const mountedOn = (o: { x: number; y: number; half: { x: number; y: number } }): SurfaceType | null =>
+      Math.abs(o.y - o.half.y) < 1e-9 ? 'floor' : Math.abs(o.y + o.half.y - height) < 1e-9 ? 'ceiling'
+        : Math.abs(o.x - o.half.x + halfWidth) < 1e-9 ? 'left' : Math.abs(o.x + o.half.x - halfWidth) < 1e-9 ? 'right' : null;
+    const seen = new Set<SurfaceType>();
+    const opening = decorateChunk(planChunk({ id: 0, seed: 5, d0: 0, kind: 'normal', difficulty: 0, entry: initialReachableState(), intro: true }));
+    expect(opening.validation.accepted).toBe(true);
+    expect(opening.obstacles.some(o => mountedOn(o) === 'floor')).toBe(true);
+    for (const kind of ['multiple', 'wall-left', 'wall-right'] as ScenarioKind[]) {
+      const chunk = decorateChunk(planChunk({ id: 1, seed: 217, d0: 0, kind, difficulty: 1, entry: initialReachableState() }));
+      expect(chunk.validation.accepted).toBe(true);
+      for (const o of chunk.obstacles) {
+        const surface = mountedOn(o);
+        expect(surface).not.toBeNull();
+        // Every obstacle sits on real geometry of the surface it is mounted to.
+        expect(chunk.slabs.some(s => s.surface === surface && s.d0 <= o.d - o.half.z && s.d1 >= o.d + o.half.z)).toBe(true);
+        seen.add(surface!);
+      }
+    }
+    expect([...seen].sort()).toEqual(['ceiling', 'floor', 'left', 'right']);
+  });
   it('rejects a solid barrier through the certified route', () => {
     const chunk = planChunk({ id: 0, seed: 217, d0: 0, kind: 'normal', difficulty: 0, entry: initialReachableState() });
     chunk.obstacles.push({ id: 99, x: 0, y: 5, d: 90, half: { x: 6, y: 5, z: 1 } });

@@ -10,8 +10,11 @@ export const DECORATOR_CONFIG = {
   routeClearance: 1.2,
   minSpan: 12,
   maxSpan: 24,
-  maxObstaclesPerSurface: 2,
-  obstacleSpacing: 50,
+  /** Floors carry the slalom; walls and ceilings get sparser hazards. */
+  maxObstacles: { floor: 6, ceiling: 3, left: 3, right: 3 } as Record<SurfaceType, number>,
+  obstacleSpacing: { floor: 24, ceiling: 45, left: 45, right: 45 } as Record<SurfaceType, number>,
+  /** Extra floor candidates along each slab, so obstacles can fill lanes the route vacates. */
+  floorCandidateStep: 6,
   obstacleWidth: 0.8,
   obstacleDepth: 0.7,
   obstacleHalfLength: { min: 1.6, max: 2.4 },
@@ -69,34 +72,43 @@ function boxesOverlap(a: ObstacleLike, b: ObstacleLike): boolean {
 function placeSurfaceObstacles(base: PlannedChunk, extras: Omit<Slab, 'id'>[], rng: Rng): ObstacleLike[] {
   const obstacles: ObstacleLike[] = [];
   let nextId = base.obstacles.reduce((next, obstacle) => Math.max(next, obstacle.id + 1), 1);
+  const edge = CONFIG.corridor.halfWidth;
   for (const surface of SURFACES) {
     const spans = [...base.slabs, ...extras].filter(slab => slab.surface === surface);
     const sameSurface: ObstacleLike[] = [];
     const side = rng.chance(0.5) ? -1 : 1;
     const wall = surface === 'left' || surface === 'right';
     const wallLanes = [1.8, CONFIG.corridor.height - 1.8, 3.2, CONFIG.corridor.height - 3.2];
-    const lanes = wall
-      ? (side < 0 ? wallLanes : [...wallLanes].reverse())
-      : [side * (CONFIG.corridor.halfWidth - 1.8), -side * (CONFIG.corridor.halfWidth - 1.8),
-        side * (CONFIG.corridor.halfWidth - 2.8), -side * (CONFIG.corridor.halfWidth - 2.8)];
-    // Try one central placement per slab before a second placement on a long slab.
-    for (const fraction of [0.5, 0.2, 0.8]) {
+    const sideLanes = [side * (edge - 1.8), -side * (edge - 1.8), side * (edge - 2.8), -side * (edge - 2.8)];
+    const centreLanes = [0, side * 1.6, -side * 1.6];
+    const lanes = wall ? (side < 0 ? wallLanes : [...wallLanes].reverse()) : sideLanes;
+    // Floors first sweep the centre, which is free only where a slalom route has moved aside,
+    // so those blocks force steering. Then one central placement per slab and the slab ends.
+    const passes: { pass: number | 'sweep'; lanes: number[] }[] = [
+      ...(surface === 'floor' ? [{ pass: 'sweep' as const, lanes: centreLanes }] : []),
+      ...[0.5, 0.2, 0.8].map(pass => ({ pass, lanes })),
+    ];
+    for (const { pass, lanes } of passes) {
       for (const slab of spans) {
-        if (sameSurface.length >= DECORATOR_CONFIG.maxObstaclesPerSurface) break;
         const halfLength = rng.range(DECORATOR_CONFIG.obstacleHalfLength.min, DECORATOR_CONFIG.obstacleHalfLength.max);
         const from = slab.d0 + (slab.bevel === false ? 0 : LEAD_BEVEL) + halfLength + DECORATOR_CONFIG.supportInset;
         const to = slab.d1 - halfLength - DECORATOR_CONFIG.supportInset;
         if (to < from) continue;
-        const d = from + (to - from) * fraction;
-        if (sameSurface.some(obstacle => Math.abs(obstacle.d - d) < DECORATOR_CONFIG.obstacleSpacing)) continue;
-        for (const lane of lanes) {
-          const obstacle = surfaceObstacle(surface, lane, d, halfLength, nextId);
-          if (!protectedFromBox(base.route, obstacle)
-            || [...base.obstacles, ...obstacles].some(existing => boxesOverlap(existing, obstacle))) continue;
-          obstacles.push(obstacle);
-          sameSurface.push(obstacle);
-          nextId++;
-          break;
+        const positions = pass === 'sweep'
+          ? Array.from({ length: Math.floor((to - from) / DECORATOR_CONFIG.floorCandidateStep) + 1 }, (_, i) => from + i * DECORATOR_CONFIG.floorCandidateStep)
+          : [from + (to - from) * pass];
+        for (const d of positions) {
+          if (sameSurface.length >= DECORATOR_CONFIG.maxObstacles[surface]) break;
+          if (sameSurface.some(obstacle => Math.abs(obstacle.d - d) < DECORATOR_CONFIG.obstacleSpacing[surface])) continue;
+          for (const lane of lanes) {
+            const obstacle = surfaceObstacle(surface, lane, d, halfLength, nextId);
+            if (!protectedFromBox(base.route, obstacle)
+              || [...base.obstacles, ...obstacles].some(existing => boxesOverlap(existing, obstacle))) continue;
+            obstacles.push(obstacle);
+            sameSurface.push(obstacle);
+            nextId++;
+            break;
+          }
         }
       }
     }

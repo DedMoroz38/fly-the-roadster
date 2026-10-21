@@ -5,10 +5,12 @@ export const GENERATOR_CONFIG = {
   openingDifficultyMultiplier: 1.5,
   openingDistance: 1000,
   candidateAttempts: 3,
-  recoveryEvery: 4,
-  easySectionChance: 0.12,
+  recoveryEvery: 5,
+  easySectionChance: 0.05,
   openingChallengeChunks: 2,
   generateAhead: 1600,
+  /** Validated distance required before the menu appears. */
+  startBuffer: 400,
   buildAhead: 700,
   keepBehind: 100,
 } as const;

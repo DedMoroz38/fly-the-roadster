@@ -32,7 +32,7 @@ const CONTROLS: [string, string][] = [
 ];
 
 const CHALLENGE_LABEL: Record<string, string> = {
-  normal: 'Recovery road', gap: 'Flight gap', ceiling: 'Ceiling crossing',
+  normal: 'Floor run', gap: 'Flight gap', ceiling: 'Ceiling crossing',
   'wall-left': 'Left wall crossing', 'wall-right': 'Right wall crossing',
   multiple: 'Surface transitions', flight: 'Extended flight',
 };

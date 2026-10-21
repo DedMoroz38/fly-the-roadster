@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { CarModel } from './carModel';
 
+/** Turntable speed in rad/s: about one turn every 6 s (9 s with reduced motion). */
+export const MENU_SPIN = { normal: 1.05, reduced: 0.7 } as const;
+
 /** Isolated showroom for the actual gameplay car; it never touches the simulation. */
 export class MenuScene {
   private readonly renderer: THREE.WebGLRenderer;
@@ -13,6 +16,7 @@ export class MenuScene {
   private frame = 0;
   private lastTime = 0;
   private time = 0;
+  private spin = -2.45;
   private disposed = false;
 
   constructor(private readonly host: HTMLElement) {
@@ -59,11 +63,10 @@ export class MenuScene {
     } else {
       window.addEventListener('resize', this.resize);
     }
-    this.motion.addEventListener('change', this.onMotionChange);
     this.pose(0);
     this.resize();
     this.lastTime = performance.now();
-    if (!this.motion.matches) this.frame = requestAnimationFrame(this.animate);
+    this.frame = requestAnimationFrame(this.animate);
   }
 
   private resize = () => {
@@ -78,11 +81,14 @@ export class MenuScene {
     this.renderer.render(this.scene, this.camera);
   };
 
+  /** Turntable spin always runs; reduced motion only slows it and drops the bob. */
   private pose(dt: number) {
+    const reduced = this.motion.matches;
     this.car.update(dt, 0);
-    this.car.group.rotation.set(0, -2.45 + this.time * 0.28, Math.sin(this.time * 0.5) * 0.025);
-    this.car.group.position.y = 0.06 + Math.sin(this.time * 1.25) * 0.07;
-    this.rings.rotation.y = -this.time * 0.11;
+    this.spin += dt * (reduced ? MENU_SPIN.reduced : MENU_SPIN.normal);
+    this.car.group.rotation.set(0, this.spin, reduced ? 0 : Math.sin(this.time * 0.5) * 0.025);
+    this.car.group.position.y = 0.06 + (reduced ? 0 : Math.sin(this.time * 1.25) * 0.07);
+    this.rings.rotation.y = -this.time * (reduced ? 0.04 : 0.25);
   }
 
   private animate = (now: number) => {
@@ -95,19 +101,12 @@ export class MenuScene {
     this.frame = requestAnimationFrame(this.animate);
   };
 
-  private onMotionChange = () => {
-    cancelAnimationFrame(this.frame);
-    this.lastTime = performance.now();
-    if (!this.motion.matches && !this.disposed) this.frame = requestAnimationFrame(this.animate);
-  };
-
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.frame);
     this.observer?.disconnect();
     window.removeEventListener('resize', this.resize);
-    this.motion.removeEventListener('change', this.onMotionChange);
     const geometries = new Set<THREE.BufferGeometry>();
     const materials = new Set<THREE.Material>();
     this.scene.traverse(object => {

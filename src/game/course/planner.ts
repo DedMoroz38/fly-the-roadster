@@ -14,10 +14,12 @@ export interface ReachableState {
   fuel: number; heat: number; overheated: boolean; suctionOn: boolean; surface: SurfaceType | null;
   /** Actual integration overshoot beyond the preceding chunk boundary, carried forward. */
   distanceOffset: number;
+  /** Chunk-relative distance of the latest touchdown or standing start; negative = an earlier chunk. */
+  lastArrival: number;
 }
 export const initialReachableState = (): ReachableState => ({
   x: 0, y: CONFIG.car.halfExtents.y + 0.02, roll: 0, vx: 0, vy: 0, forward: 0, rollVelocity: 0,
-  fuel: CONFIG.fuel.capacity, heat: 0, overheated: false, suctionOn: false, surface: 'floor', distanceOffset: 10,
+  fuel: CONFIG.fuel.capacity, heat: 0, overheated: false, suctionOn: false, surface: 'floor', distanceOffset: 10, lastArrival: 10,
 });
 export interface RouteWaypoint {
   d: number; x: number; y: number; roll: number; forward: number; fuel: number; heat: number;
@@ -61,10 +63,14 @@ export interface PlanChunkOptions {
 interface Blueprint { phases: ManeuverPhase[]; supports: Omit<Slab, 'id'>[]; pickups: PickupLike[]; obstacles: ObstacleLike[]; end: number; required: SurfaceType[] }
 
 /** First choose maneuvers and support intervals; physical slabs are built from those intervals. */
-function blueprint(kind: ScenarioKind, seed: number, difficulty: number, intro = false): Blueprint {
+function blueprint(kind: ScenarioKind, seed: number, difficulty: number, entry: ReachableState, intro = false): Blueprint {
   const rng = new Rng(seed);
-  const lead = rng.int(P.leadMin, P.leadMax);
+  // The reaction interval runs from the latest touchdown, which may be in the previous chunk.
+  const settled = Math.max(0, entry.lastArrival + CONFIG.car.maxForwardSpeed * P.reactionSeconds + P.reactionMargin);
+  const baseLead = rng.int(P.leadMin, P.leadMax);
+  const leadAfter = (launchLead: number) => Math.max(baseLead, Math.ceil(settled + launchLead));
   const traversalExtra = rng.int(0, P.traversalVariation);
+  const traversal = P.surfaceTraversal + traversalExtra;
   const setupX = CONFIG.corridor.halfWidth - P.setupWallDistance;
   const wallX = CONFIG.corridor.halfWidth - CONFIG.car.halfExtents.y;
   const recovery = CONFIG.car.maxForwardSpeed * P.recoverySeconds;
@@ -77,12 +83,28 @@ function blueprint(kind: ScenarioKind, seed: number, difficulty: number, intro =
   const roll = (angle: number) => phases.push({ action: 'roll', label: `roll ${Math.round(angle * 180 / Math.PI)}°`, roll: angle, suction: false });
   const catchSurface = (surface: SurfaceType) => phases.push({ action: 'catch', label: `attach ${surface}`, surface, suction: surface !== 'floor' });
   const support = (surface: SurfaceType, d0: number, d1: number) => supports.push({ surface, d0, d1, bevel: d0 !== 0 });
+  // Floor runs weave between lanes; the decorator then blocks the lanes the route leaves.
+  const slalom = (untilD: number) => {
+    // Pass the entry fuel cell centred before the first lane change.
+    let d = P.pickupInset + 4, side = rng.chance(0.5) ? -1 : 1;
+    drive(d);
+    while (untilD - d > P.slalomSegment.max + P.slalomExit) {
+      d += rng.int(P.slalomSegment.min, P.slalomSegment.max);
+      phases.push({ action: 'drive', label: `slalom ${side < 0 ? 'left' : 'right'}`, untilD: d, surface: 'floor',
+        x: side * rng.range(P.slalomLane.min, P.slalomLane.max), y: 5, suction: false });
+      side = -side;
+    }
+    drive(untilD);
+  };
   if (kind === 'normal') {
-    end = intro ? rng.int(P.introMin, P.introMax) : lead + recovery;
-    drive(end);
+    // The opening and the difficulty-0 fallback stay straight; other floor sections are slaloms.
+    end = intro ? rng.int(P.introMin, P.introMax) : difficulty > 0 ? rng.int(P.slalomMin, P.slalomMax) : baseLead + recovery;
+    if (intro || difficulty <= 0) drive(end);
+    else slalom(end);
     support('floor', 0, end);
   } else if (kind === 'gap' || kind === 'flight') {
     const gap = kind === 'gap' ? P.gapMin + difficulty * (P.gapMax - P.gapMin) : P.flightMin + difficulty * (P.flightMax - P.flightMin);
+    const lead = leadAfter(P.gapLaunchLead);
     drive(lead - P.gapLaunchLead);
     phases.push({ action: 'flight', label: kind === 'gap' ? 'lift across gap' : 'extended flight', duration: kind === 'gap' ? 3.4 : 4.2,
       pulses: kind === 'gap' ? [[0, 0.7]] : [[0, 0.5], [1.3, 1.75], [2.2, 2.65]], suction: false });
@@ -92,64 +114,71 @@ function blueprint(kind: ScenarioKind, seed: number, difficulty: number, intro =
     support('floor', 0, lead);
     support('floor', lead + gap, end);
   } else if (kind === 'ceiling' || kind === 'multiple') {
+    const lead = leadAfter(P.ceilingLaunchLead);
     drive(lead - P.ceilingLaunchLead);
     phases.push({ action: 'launch', label: 'launch toward ceiling', duration: P.ceilingLiftSeconds, suction: false });
     roll(Math.PI);
     catchSurface('ceiling');
     required.push('ceiling');
     support('floor', 0, lead);
-    support('ceiling', lead - P.supportOverlap, lead + 160 + traversalExtra);
+    support('ceiling', lead - P.supportOverlap, lead + traversal + 40);
     if (kind === 'ceiling') {
-      drive(lead + 120 + traversalExtra, 'ceiling');
+      drive(lead + traversal, 'ceiling');
       roll(0);
       catchSurface('floor');
-      end = lead + 160 + traversalExtra + recovery;
+      end = lead + traversal + 40 + recovery;
       drive(end);
-      support('floor', lead + 100 + traversalExtra, end);
+      support('floor', lead + traversal - 20, end);
     } else {
-      drive(lead + 110 + traversalExtra, 'ceiling', -setupX);
-      roll(-Math.PI / 2);
-      catchSurface('left');
-      drive(lead + 250 + traversalExtra, 'left', -wallX, P.wallReturnHeight);
+      // Mirrored per seed, so the ceiling hands over to either wall.
+      const side: SurfaceType = rng.chance(0.5) ? 'left' : 'right';
+      const sign = side === 'left' ? -1 : 1;
+      drive(lead + 110 + traversalExtra, 'ceiling', sign * setupX);
+      roll(sign * Math.PI / 2);
+      catchSurface(side);
+      drive(lead + 250 + traversalExtra, side, sign * wallX, P.wallReturnHeight);
       roll(0);
       catchSurface('floor');
-      end = lead + 290 + traversalExtra + recovery;
+      end = lead + 250 + P.wallDropPad + traversalExtra + recovery;
       drive(end);
-      support('left', lead + 90 + traversalExtra, lead + 290 + traversalExtra);
+      support(side, lead + 90 + traversalExtra, lead + 250 + P.wallDropPad + traversalExtra);
       support('floor', lead + 230 + traversalExtra, end);
-      required.push('left');
+      required.push(side);
     }
   } else {
     const side = kind === 'wall-left' ? 'left' : 'right';
     const sign = side === 'left' ? -1 : 1;
-    drive(CONFIG.car.maxForwardSpeed * P.reactionSeconds);
+    // Sideways setup is a maneuver too: it starts after the reaction interval and entry fuel cell.
+    const setupFrom = Math.max(settled, P.pickupInset + 4);
+    const lead = Math.max(baseLead, Math.ceil(setupFrom + P.wallSetupLead));
+    drive(setupFrom);
     drive(lead - 12, 'floor', sign * setupX);
     phases.push({ action: 'launch', label: `launch toward ${side} wall`, duration: P.wallLiftSeconds, suction: false });
     roll(sign * Math.PI / 2);
     catchSurface(side);
-    drive(lead + 120 + traversalExtra, side, sign * wallX, P.wallReturnHeight);
+    drive(lead + traversal, side, sign * wallX, P.wallReturnHeight);
     roll(0);
     catchSurface('floor');
-    end = lead + 160 + traversalExtra + recovery;
+    end = lead + traversal + P.wallDropPad + recovery;
     drive(end);
     support('floor', 0, lead);
-    support(side, lead - P.supportOverlap, lead + 160 + traversalExtra);
-    support('floor', lead + 100 + traversalExtra, end);
+    support(side, lead - P.supportOverlap, lead + traversal + P.wallDropPad);
+    support('floor', lead + traversal - 20, end);
     required.push(side);
   }
   // Recovery pickups are actual swept pickups in both validation and live play.
   const pickups: PickupLike[] = [
     { id: 1, x: 0, y: 0.8, d: P.pickupInset, surface: 'floor' },
-    { id: 2, x: 0, y: 0.8, d: end - P.pickupInset, surface: 'floor' },
+    { id: 2, x: 0, y: 0.8, d: end - P.exitPickupInset, surface: 'floor' },
   ];
   return { phases, supports, pickups, obstacles: [], end, required };
 }
 
-function readState(sim: Simulation, boundary: number): ReachableState {
+function readState(sim: Simulation, boundary: number, lastArrival: number): ReachableState {
   const v = sim.vehicle, p = v.position, velocity = v.body.linvel();
   return { x: p.x, y: p.y, roll: v.roll, vx: velocity.x, vy: velocity.y, forward: v.forwardSpeed,
     rollVelocity: v.body.angvel().z, fuel: sim.fuel.value, heat: v.suctionHeat, overheated: v.suctionOverheated,
-    suctionOn: v.suctionOn, surface: v.supportSurface, distanceOffset: sim.distance - boundary };
+    suctionOn: v.suctionOn, surface: v.supportSurface, distanceOffset: sim.distance - boundary, lastArrival: lastArrival - boundary };
 }
 function snapshot(sim: Simulation, phase: string): RouteWaypoint {
   const v = sim.vehicle;
@@ -209,7 +238,7 @@ function replay(entry: ReachableState, b: Blueprint, tape?: ControlState[], timi
   const controls: ControlState[] = [], recordedPhases: number[] = [], samples: RouteWaypoint[] = [], reasons: string[] = [];
   const visited = new Set<SurfaceType>();
   let phase = 0, phaseStart = 0, minFuel = entry.fuel, maxHeat = entry.heat;
-  let lastArrival = entry.distanceOffset, wasAirborne = false, minReactionSeconds = Infinity;
+  let lastArrival = entry.lastArrival, wasAirborne = false, minReactionSeconds = Infinity;
   const shift = Math.round(timingShift / sim.dt);
   const maxSteps = Math.ceil(P.maxValidationSeconds / sim.dt);
   let steps = 0;
@@ -260,7 +289,7 @@ function replay(entry: ReachableState, b: Blueprint, tape?: ControlState[], timi
     }
     if (sim.distance < b.end) reasons.push('did not reach chunk exit');
     for (const surface of b.required) if (!visited.has(surface)) reasons.push(`required ${surface} traversal not reached`);
-    const exit = readState(sim, b.end);
+    const exit = readState(sim, b.end, lastArrival);
     if (exit.surface !== 'floor' || sim.vehicle.mode === 'airborne' || Math.abs(exit.roll) > 0.08 || Math.abs(exit.x) > 0.7 || Math.abs(exit.vx) > 0.3 || Math.abs(exit.vy) > 0.5) reasons.push('exit is not a stable centred floor state');
     if (exit.fuel < P.exitFuelReserve) reasons.push('insufficient exit fuel reserve');
     if (exit.heat >= CONFIG.suction.recoveryHeat || exit.overheated || exit.suctionOn) reasons.push('exit lacks suction recovery');
@@ -290,7 +319,8 @@ function candidateBlueprint(candidate: PlannedChunk): Blueprint {
     pickups: candidate.pickups.map(p => ({ ...p, d: p.d - candidate.d0 })),
     obstacles: candidate.obstacles.map(o => ({ ...o, d: o.d - candidate.d0 })),
     end: candidate.d1 - candidate.d0,
-    required: ['floor', ...(candidate.kind === 'ceiling' ? ['ceiling'] : candidate.kind === 'multiple' ? ['ceiling', 'left'] : candidate.kind === 'wall-left' ? ['left'] : candidate.kind === 'wall-right' ? ['right'] : [])] as SurfaceType[],
+    // Every planned attachment is a required traversal; decorative islands are not.
+    required: [...new Set<SurfaceType>(['floor', ...candidate.plan.flatMap(p => p.action === 'catch' && p.surface ? [p.surface] : [])])],
   };
 }
 
@@ -339,7 +369,7 @@ export function recertifyPlan(candidate: PlannedChunk): PlannedChunk {
 export function planChunk(options: PlanChunkOptions): PlannedChunk {
   const { id, seed, d0, kind, entry } = options;
   const difficulty = clamp(options.difficulty, 0, 1);
-  const b = blueprint(kind, seed, difficulty, options.intro);
+  const b = blueprint(kind, seed, difficulty, entry, options.intro);
   const nominal = replay(entry, b);
   const samples = nominal.samples.map(p => ({ ...p, d: p.d + d0 }));
   const candidate: PlannedChunk = {

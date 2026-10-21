@@ -11,7 +11,7 @@ beforeAll(initPhysics);
 
 describe('opening challenge pacing', () => {
   for (const seed of [1, 42, 233]) {
-    it(`seed ${seed}: reaches the first recorded action within 305 m and 13 seconds`, () => {
+    it(`seed ${seed}: reaches the first recorded action within 200 m and 9 seconds`, () => {
       const sim = new Simulation({ createLevel: world => new Course(world, seed) });
       const course = sim.level as Course;
       const intro = course.chunks[0];
@@ -43,8 +43,8 @@ describe('opening challenge pacing', () => {
         }
         expect(firstAction).toBeDefined();
         expect(firstAction!.chunk).toBe(1);
-        expect(firstAction!.distance).toBeLessThan(305);
-        expect(firstAction!.seconds).toBeLessThan(13);
+        expect(firstAction!.distance).toBeLessThan(200);
+        expect(firstAction!.seconds).toBeLessThan(9);
         expect(sim.refuelCount).toBeGreaterThanOrEqual(2);
       } finally { sim.dispose(); }
     }, 30000);
@@ -67,6 +67,27 @@ describe('opening challenge pacing', () => {
       expect(forcedNormal.validation.accepted).toBe(true);
     } finally { chance.mockRestore(); }
   }, 30000);
+
+  it('spends most certified route time off plain floor, with floor sections run as slaloms', () => {
+    const generator = new ReachableCourseGenerator(42);
+    const time: Record<string, number> = {};
+    let samples = 0, centreBlocks = 0;
+    while (generator.frontier < 3000) {
+      const chunk = generator.next();
+      expect(chunk.validation.accepted).toBe(true);
+      for (const p of chunk.route) {
+        const key = p.surface === 'floor' ? (p.phase.startsWith('slalom') ? 'slalom' : 'floor') : p.surface === null ? 'air' : 'surface';
+        time[key] = (time[key] ?? 0) + 1;
+        samples++;
+      }
+      // Slalom routes vacate the centre, so obstacles there force steering.
+      centreBlocks += chunk.obstacles.filter(o => Math.abs(o.y - o.half.y) < 1e-9 && Math.abs(o.x) < 2).length;
+    }
+    expect(((time.floor ?? 0) + (time.slalom ?? 0)) / samples).toBeLessThan(0.55);
+    expect((time.surface ?? 0) / samples).toBeGreaterThan(0.3);
+    expect(time.slalom ?? 0).toBeGreaterThan(0);
+    expect(centreBlocks).toBeGreaterThan(0);
+  }, 120000);
 
   it('raises opening difficulty by 50% and continues increasing after the first kilometre', () => {
     expect(difficultyAt(0)).toBe(0);

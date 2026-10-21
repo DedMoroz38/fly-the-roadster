@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Course } from '../src/game/course/course';
+import { Course, STREAM } from '../src/game/course/course';
 import type { ChunkSource } from '../src/game/course/chunkSource';
 import { GeneratedChunk, ReachableCourseGenerator } from '../src/game/course/routeGenerator';
 import { emptyControls } from '../src/game/input';
@@ -30,6 +30,7 @@ describe('published terrain remains traversable in one continuous physics world'
           expect(chunk.validation.accepted).toBe(true);
           expect(chunk.witness.dt).toBe(sim.dt);
           expect(chunk.witness.controls.length).toBeGreaterThan(0);
+          const startDrift = sim.distance - chunk.d0 - chunk.entry.distanceOffset;
           for (let step = 0; step < chunk.witness.controls.length; step++) {
             expect(course.needsBuffer(sim.distance)).toBe(false);
             sim.step(chunk.witness.controls[step]);
@@ -46,7 +47,11 @@ describe('published terrain remains traversable in one continuous physics world'
             + `roll ${sim.vehicle.roll}; certified ${JSON.stringify(chunk.exit)}`;
           expect(sim.vehicle.supportSurface, exitContext).toBe('floor');
           expect(sim.vehicle.mode).not.toBe('airborne');
-          expect(Math.abs(sim.distance - chunk.d1)).toBeLessThan(CONFIG.car.maxForwardSpeed * PLANNER_CONFIG.timingTolerance);
+          // Open-loop inputs never re-sync, so boundary offsets random-walk across many chunks
+          // (measured up to ~6.6 m over 6 km, with every maneuver still completing). Each chunk's
+          // own contribution must stay inside the certified ±0.15 s action-timing margin.
+          const drift = sim.distance - chunk.d1 - chunk.exit.distanceOffset;
+          expect(Math.abs(drift - startDrift), exitContext).toBeLessThan(CONFIG.car.maxForwardSpeed * PLANNER_CONFIG.timingTolerance);
           chunkId++;
         }
         expect(sim.distance).toBeGreaterThanOrEqual(6000);
@@ -63,6 +68,10 @@ describe('published terrain remains traversable in one continuous physics world'
     const base = new ReachableCourseGenerator(117, { template: 'normal' }).next();
     expect(base.validation.accepted).toBe(true);
     expect(base.witness.controls.every(c => JSON.stringify(c) === JSON.stringify(emptyControls()))).toBe(true);
+    // Retention bounds follow the streaming window and this repeated section's length.
+    const length = base.d1 - base.d0;
+    const maxPlans = Math.ceil((STREAM.generateAhead + STREAM.keepBehind) / length) + 1;
+    const maxBuilt = Math.ceil((STREAM.buildAhead + STREAM.keepBehind) / length) + 1;
     let nextId = 0;
     const pending: GeneratedChunk[] = [];
     const source: ChunkSource = {
@@ -103,9 +112,9 @@ describe('published terrain remains traversable in one continuous physics world'
           expect(sim.vehicle.body).toBe(body);
           expect(Math.abs(sim.vehicle.position.z)).toBeLessThan(CONFIG.origin.rebaseDistance + 1);
           expect(course.needsBuffer(sim.distance)).toBe(false);
-          expect(course.chunks.length).toBeLessThan(8);
-          expect(course.activePickups.size).toBeLessThan(10);
-          expect(world.colliders.len()).toBeLessThan(30);
+          expect(course.chunks.length).toBeLessThanOrEqual(maxPlans);
+          expect(course.activePickups.size).toBeLessThanOrEqual(maxBuilt * base.pickups.length);
+          expect(world.colliders.len()).toBeLessThanOrEqual(maxBuilt * (base.slabs.length + base.obstacles.length));
           if (sim.time > 4) {
             expect(sim.vehicle.supportSurface).toBe('floor');
             expect(sim.vehicle.mode).toBe('grounded');

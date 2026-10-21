@@ -41,7 +41,9 @@ export class WorkerChunkSource implements ChunkSource {
           this.pending.push(data.chunk);
           if (data.chunk.d0 < GENERATOR_CONFIG.generateAhead) this.bootstrap.push(data.chunk);
         }
-        if (data.type === 'ready') this.settleReady();
+        // Start once a validated opening exists; the worker keeps filling the look-ahead and
+        // the course pauses safely if play ever reaches the unvalidated frontier.
+        if (data.type === 'ready' || this.frontier >= GENERATOR_CONFIG.startBuffer) this.settleReady();
       };
     });
     this.requested = GENERATOR_CONFIG.generateAhead;

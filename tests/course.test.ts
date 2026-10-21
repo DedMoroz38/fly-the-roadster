@@ -4,6 +4,8 @@ import { Course, STREAM } from '../src/game/course/course';
 import { ChunkSource, SynchronousChunkSource } from '../src/game/course/chunkSource';
 import { GeneratedChunk, ReachableCourseGenerator } from '../src/game/course/routeGenerator';
 import { PLANNER_CONFIG } from '../src/game/course/plannerConfig';
+import { DECORATOR_CONFIG } from '../src/game/course/decorator';
+import { SURFACES } from '../src/game/surfaces';
 import { initPhysics } from '../src/game/simulation';
 import { CONFIG } from '../src/game/config';
 import { controls, makeSim, run } from './helpers';
@@ -36,6 +38,7 @@ describe('validated course streaming', () => {
     const minChunkLength = PLANNER_CONFIG.leadMin + CONFIG.car.maxForwardSpeed * PLANNER_CONFIG.recoverySeconds;
     const maxPlans = Math.ceil((STREAM.generateAhead + STREAM.keepBehind) / minChunkLength) + 1;
     const maxBuiltPlans = Math.ceil((STREAM.buildAhead + STREAM.keepBehind) / minChunkLength) + 1;
+    const maxObstaclesPerChunk = SURFACES.reduce((sum, surface) => sum + DECORATOR_CONFIG.maxObstacles[surface], 0);
     try {
       for (let distance = 0; distance <= 50_000; distance += 500) {
         course.update(distance);
@@ -44,7 +47,7 @@ describe('validated course streaming', () => {
         expect(source.generator.chunks.length).toBeLessThanOrEqual(maxPlans);
         expect(course.activePickups.size).toBeLessThanOrEqual(maxBuiltPlans * 2);
         expect(course.slabs.active.size).toBeLessThanOrEqual(maxBuiltPlans * 7 + 1);
-        expect(course.obstacles.active.size).toBeLessThanOrEqual(maxBuiltPlans);
+        expect(course.obstacles.active.size).toBeLessThanOrEqual(maxBuiltPlans * maxObstaclesPerChunk);
         expect(course.routeWaypoints.length).toBeLessThanOrEqual(maxPlans * Math.ceil(PLANNER_CONFIG.maxValidationSeconds * CONFIG.physicsHz / PLANNER_CONFIG.sampleEverySteps));
         for (const chunk of course.chunks) {
           expect(chunk.d1).toBeGreaterThanOrEqual(distance - STREAM.keepBehind);
@@ -57,7 +60,7 @@ describe('validated course streaming', () => {
         // Count the owned colliders to catch orphaned allocations during run rebuilds.
         expect(course.slabs.colliderCount).toBeLessThanOrEqual(course.slabs.active.size);
         expect(world.colliders.len()).toBe(course.slabs.colliderCount + course.obstacles.active.size);
-        expect(world.colliders.len()).toBeLessThanOrEqual(maxBuiltPlans * 15 + 1);
+        expect(world.colliders.len()).toBeLessThanOrEqual(maxBuiltPlans * (7 + maxObstaclesPerChunk) + 1);
       }
       expect(course.chunks[0].id).toBeGreaterThan(70);
       expect(source.frontier).toBeGreaterThanOrEqual(50_000 + STREAM.generateAhead);
