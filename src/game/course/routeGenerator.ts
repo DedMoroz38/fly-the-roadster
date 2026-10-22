@@ -3,7 +3,7 @@ import { difficultyAt, GENERATOR_CONFIG } from './generatorConfig';
 import { decorateChunk } from './decorator';
 import { initialReachableState, planChunk, PlannedChunk, ReachableState, ScenarioKind } from './planner';
 
-export const SCENARIOS: readonly ScenarioKind[] = ['normal', 'gap', 'ceiling', 'wall-left', 'wall-right', 'multiple', 'flight'];
+export const SCENARIOS: readonly ScenarioKind[] = ['normal', 'gap', 'ceiling', 'wall-left', 'wall-right', 'multiple', 'flight', 'hurdle'];
 
 export interface GeneratorOptions {
   /** Force a procedural challenge family for reproduction; parameters remain seeded. */
@@ -45,6 +45,7 @@ export class ReachableCourseGenerator {
       ['wall-right', 1.1 + difficulty],
       ['flight', 0.6 + difficulty],
       ['multiple', 0.6 + difficulty * 2.5],
+      ['hurdle', 0.8 + difficulty],
     ];
     let choice = rng.next() * weighted.reduce((sum, [, weight]) => sum + weight, 0);
     for (const [kind, weight] of weighted) if ((choice -= weight) <= 0) return kind;

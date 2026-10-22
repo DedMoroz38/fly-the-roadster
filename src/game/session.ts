@@ -1,3 +1,4 @@
+import { wrapAngle } from '../core/math';
 import { CONFIG } from './config';
 import { ControlState } from './input';
 import { Simulation } from './simulation';
@@ -87,10 +88,29 @@ export class FailureMonitor {
   }
 }
 
+/** A completed airborne trick, paid out on a safe landing. */
+export interface FlipAward {
+  id: number;
+  flips: number;
+  points: number;
+}
+
+/** Full airborne rolls in one direction, allowing a landing just short of the last one. */
+export function completedFlips(airRoll: number): number {
+  const tolerance = CONFIG.score.flipToleranceDeg * Math.PI / 180;
+  return Math.floor((Math.abs(airRoll) + tolerance) / (2 * Math.PI));
+}
+
+export const flipPoints = (flips: number) => CONFIG.score.flipBonus * flips * flips;
+
 export interface SessionSnapshot {
   state: SessionState;
-  distance: number;
+  /** Points: distance points plus flip bonuses. */
+  score: number;
   best: number;
+  /** Furthest logical distance in metres. */
+  distance: number;
+  lastFlip: FlipAward | null;
   speed: number;
   totalSpeed: number;
   forwardVelocity: number;
@@ -118,21 +138,30 @@ export interface SessionSnapshot {
 export class GameSession {
   state: SessionState = 'ready';
   sim: Simulation;
-  /** Furthest forward distance reached this attempt (the score). */
+  /** Points this attempt: furthest distance plus flip bonuses. */
   score = 0;
   best = 0;
+  /** Furthest forward distance reached this attempt, in metres. */
+  distance = 0;
+  flipBonus = 0;
+  lastFlip: FlipAward | null = null;
   failReason: FailReason | null = null;
   helpOpen = false;
   debugEnabled = false;
   /** Incremented on every restart so views can reset themselves. */
   attempt = 0;
   private monitor = new FailureMonitor();
+  private prevRoll = 0;
+  private airRoll = 0;
+  private wasAirborne = false;
+  private flipAwards = 0;
 
   constructor(
     readonly seed: number,
     private createSim: (seed: number) => Simulation,
   ) {
     this.sim = createSim(seed);
+    this.prevRoll = this.sim.vehicle.roll;
   }
 
   /** Only the main menu's explicit start action begins the initial attempt. */
@@ -146,13 +175,33 @@ export class GameSession {
   step(controls: ControlState) {
     if (this.state !== 'running') return;
     this.sim.step(controls);
-    this.score = Math.max(this.score, this.sim.distance);
+    this.distance = Math.max(this.distance, this.sim.distance);
     const fail = this.monitor.check(this.sim);
+    this.trackFlips(!fail);
+    this.score = this.distance * CONFIG.score.pointsPerMetre + this.flipBonus;
     if (fail) {
       this.state = 'gameover';
       this.failReason = fail;
       this.best = Math.max(this.best, this.score);
     }
+  }
+
+  /** Accumulates signed roll while airborne; a safe touchdown pays out the completed flips. */
+  private trackFlips(safe: boolean) {
+    const v = this.sim.vehicle, airborne = v.mode === 'airborne';
+    if (airborne) {
+      if (!this.wasAirborne) this.airRoll = 0;
+      this.airRoll += wrapAngle(v.roll - this.prevRoll);
+    } else if (this.wasAirborne && safe) {
+      const flips = completedFlips(this.airRoll);
+      if (flips > 0) {
+        const points = flipPoints(flips);
+        this.flipBonus += points;
+        this.lastFlip = { id: ++this.flipAwards, flips, points };
+      }
+    }
+    this.prevRoll = v.roll;
+    this.wasAirborne = airborne;
   }
 
   togglePause() {
@@ -178,6 +227,12 @@ export class GameSession {
     this.sim = this.createSim(this.seed);
     this.monitor.reset();
     this.score = 0;
+    this.distance = 0;
+    this.flipBonus = 0;
+    this.lastFlip = null;
+    this.airRoll = 0;
+    this.wasAirborne = false;
+    this.prevRoll = this.sim.vehicle.roll;
     this.failReason = null;
     this.state = 'running';
     this.helpOpen = false;
@@ -193,8 +248,10 @@ export class GameSession {
     };
     return {
       state: this.state,
-      distance: this.score,
+      score: this.score,
       best: Math.max(this.best, this.state === 'gameover' ? this.score : 0),
+      distance: this.distance,
+      lastFlip: this.lastFlip,
       speed: v.forwardSpeed,
       totalSpeed: Math.hypot(velocity.x, velocity.y, velocity.z),
       forwardVelocity: -velocity.z,

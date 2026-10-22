@@ -5,8 +5,10 @@ export const PLANNER_CONFIG = {
   reactionMargin: 10,
   timingTolerance: 0.15,
   recoverySeconds: 2,
-  launchFuelReserve: 1,
-  exitFuelReserve: 1,
+  /** Fuel left unplanned at each launch, so a slightly wasteful player can still complete it. */
+  launchFuelReserve: 0.25,
+  /** The next chunk opens with a pickup before any maneuver, so only a small exit margin is kept. */
+  exitFuelReserve: 0.1,
   maxValidationSeconds: 45,
   sampleEverySteps: 6,
   introMin: 110,
@@ -19,14 +21,21 @@ export const PLANNER_CONFIG = {
   wallLiftSeconds: 0.45,
   gapLaunchLead: 6,
   wallSetupLead: 40,
-  surfaceTraversal: 150,
-  traversalVariation: 60,
+  /**
+   * Wall/ceiling suction heats as fast as the floor (~4 s to critical). A traversal must outlast
+   * the reaction interval after attaching yet end before overheating, so the window is narrow.
+   */
+  surfaceTraversal: 80,
+  traversalVariation: 8,
+  /** A sideways launch attaches later than a ceiling launch; extends wall runs to match. */
+  wallAttachDelay: 5,
+  /** Ceiling drop to wall launch in a multiple; long enough to react and to cool suction. */
+  multipleFloorLeg: 110,
   setupWallDistance: 1.9,
   wallReturnHeight: 3,
   /** Wall support beyond the planned drop; the 3 m fall lands almost at once. */
   wallDropPad: 20,
   pickupInset: 12,
-  exitPickupInset: 24,
   gapMin: 24,
   gapMax: 30,
   flightMin: 52,
@@ -36,4 +45,12 @@ export const PLANNER_CONFIG = {
   slalomSegment: { min: 36, max: 46 },
   slalomLane: { min: 3.2, max: 3.6 },
   slalomExit: 50,
+  /** Full-width floor barriers jumped with one lift pulse; offset is from the launch point. */
+  hurdleCount: { min: 1, max: 3 },
+  hurdleHeight: { min: 1, max: 2 },
+  hurdleHalfLength: 0.5,
+  hurdleOffset: 18,
+  hurdleLiftSeconds: 0.4,
+  hurdleSpacing: 125,
+  hurdleLanding: 50,
 } as const;

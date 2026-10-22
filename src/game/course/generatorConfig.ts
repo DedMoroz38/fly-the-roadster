@@ -1,7 +1,7 @@
 /** Distances in metres. Keep procedural pacing separate from the vehicle's physical limits. */
 export const GENERATOR_CONFIG = {
-  difficultyScale: 850,
-  difficultyCurve: 2.0,
+  difficultyScale: 250,
+  difficultyCurve: 1.5,
   openingDifficultyMultiplier: 1.5,
   openingDistance: 1000,
   candidateAttempts: 3,

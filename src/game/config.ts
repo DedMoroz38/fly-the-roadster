@@ -44,12 +44,12 @@ export const CONFIG = {
   },
 
   fuel: {
-    capacity: 5, // seconds of continuous thrust
+    capacity: 2.5, // seconds of continuous thrust
     pickupRadius: 2.6,
   },
 
   suction: {
-    range: 2.5, // attraction requires a nearby surface facing the wheels
+    range: 3, // attraction requires a nearby surface facing the wheels
     attachDistance: 0.4, // wheels-to-surface gap that counts as attached
     maxAlignAngleDeg: 40, // wheels must face the surface within this angle
     attractAccel: 30, // pull acceleration at max range (grows as it closes)
@@ -63,11 +63,19 @@ export const CONFIG = {
     recoveryHeat: 35,
     warningHeat: 75,
     floorHeatRate: 24,
-    heatRate: 1.5, // normal wall/ceiling or airborne use
+    heatRate: 24, // wall/ceiling or airborne use; as fast as the floor
     coolingRate: 18,
     floorFuelRate: 0.18,
     fuelRate: 0.04,
     floorRollingResistance: 3, // m/s² opposing motion only during floor contact
+  },
+
+  score: {
+    pointsPerMetre: 1,
+    /** Each full airborne roll in a jump earns flipBonus × flips, so n flips pay flipBonus × n². */
+    flipBonus: 100,
+    /** A landing within the roll assist's settle angle still completes the last flip. */
+    flipToleranceDeg: 25,
   },
 
   fail: {

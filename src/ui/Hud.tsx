@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Game } from '../game/Game';
-import { FAIL_TEXT, SessionSnapshot } from '../game/session';
+import { FAIL_TEXT, flipPoints, SessionSnapshot } from '../game/session';
 import { CONFIG } from '../game/config';
 import { MainMenu } from './MainMenu';
 
@@ -19,6 +19,8 @@ export function useSnapshot(game: Game | null): SessionSnapshot | null {
   return snap;
 }
 
+const FLIP_NAME: Record<number, string> = { 1: 'Flip', 2: 'Double flip', 3: 'Triple flip', 4: 'Quad flip' };
+
 const CONTROLS: [string, string][] = [
   ['W / ↑', 'Accelerate (uses fuel) · release to cruise'],
   ['Space', 'Main thrusters (push away from wheels)'],
@@ -34,7 +36,7 @@ const CONTROLS: [string, string][] = [
 const CHALLENGE_LABEL: Record<string, string> = {
   normal: 'Floor run', gap: 'Flight gap', ceiling: 'Ceiling crossing',
   'wall-left': 'Left wall crossing', 'wall-right': 'Right wall crossing',
-  multiple: 'Surface transitions', flight: 'Extended flight',
+  multiple: 'Surface transitions', flight: 'Extended flight', hurdle: 'Barrier jumps',
 };
 
 /** Detailed telemetry is opt-in; the upcoming maneuver remains visible in normal play. */
@@ -82,11 +84,12 @@ function HelpPanel() {
       </table>
       <ul className="tips">
         <li>Floors hold you by gravity. On walls and ceilings, <b>hold E for suction</b> with the wheels facing them.</li>
-        <li>Lift thrusters push away from the wheels — roll first to aim them. A full tank provides 5 s of lift.</li>
+        <li>Lift thrusters push away from the wheels — roll first to aim them. A full tank provides {CONFIG.fuel.capacity} s of lift.</li>
         <li>Grab the green <span className="fuel-word">fuel cells</span> to refill. Acceleration, lift, roll and suction share fuel.</li>
         <li>Release E on the floor to cool and avoid drag. Overheated suction stays off until heat drops below {Math.round(CONFIG.suction.recoveryHeat / CONFIG.suction.criticalHeat * 100)}%; holding E then engages it again.</li>
         <li>Cruising is automatic and uses no fuel. Release W / ↑ to ease back to cruise speed.</li>
         <li>Landing on the roof ends the run. Roll upright before returning to the road.</li>
+        <li>You score a point per metre. Full rolls in one jump pay a bonus on a safe landing: 1 flip {flipPoints(1)}, 2 flips {flipPoints(2)}, 3 flips {flipPoints(3)}.</li>
       </ul>
       <p className="cta">Press H or Esc to resume</p>
     </div>
@@ -97,6 +100,13 @@ export function Hud({ game }: { game: Game | null }) {
   const s = useSnapshot(game);
   const [flash, setFlash] = useState(false);
   const lastRefuels = useRef(0);
+  const [flip, setFlip] = useState<SessionSnapshot['lastFlip']>(null);
+  useEffect(() => {
+    if (!s?.lastFlip) { setFlip(null); return; }
+    setFlip(s.lastFlip);
+    const t = setTimeout(() => setFlip(null), 1400);
+    return () => clearTimeout(t);
+  }, [s?.lastFlip?.id]);
   useEffect(() => {
     if (!s) return;
     if (s.refuels > lastRefuels.current) {
@@ -118,11 +128,11 @@ export function Hud({ game }: { game: Game | null }) {
     <div className={`hud ${flash ? 'refuel-flash' : ''}`}>
       <div className="hud-top">
         <div className="stat distance">
-          <span className="value">{Math.floor(s.distance)}</span>
-          <span className="unit">m</span>
+          <span className="value">{Math.floor(s.score)}</span>
+          <span className="unit">pts</span>
         </div>
         <div className="stat small">
-          <span className="label">BEST</span> {Math.floor(s.best)} m
+          <span className="label">BEST</span> {Math.floor(s.best)} pts
         </div>
         <div className="stat small">
           <span className="label">SPEED</span> {Math.round(Math.max(0, s.speed) * 3.6)} km/h
@@ -132,6 +142,10 @@ export function Hud({ game }: { game: Game | null }) {
       {s.debug && <div className="route-cue">
         <span className="label">{CHALLENGE_LABEL[s.debug.kind] ?? s.debug.kind}</span>
         <strong>{s.debug.nextAction || s.debug.phase}</strong>
+      </div>}
+      {flip && <div key={flip.id} className="flip-award" role="status">
+        <span className="flip-name">{FLIP_NAME[flip.flips] ?? `${flip.flips}× flip`}</span>
+        <span className="flip-points">+{flip.points}</span>
       </div>}
       {s.terrainStatus && <div className="terrain-status" role="status">{s.terrainStatus}</div>}
       <DebugPanel snapshot={s} />
@@ -173,8 +187,8 @@ export function Hud({ game }: { game: Game | null }) {
         <div className="overlay">
           <div className="panel gameover">
             <h2>{s.failReason ? FAIL_TEXT[s.failReason] : 'Game over'}</h2>
-            <div className="final"><span className="value">{Math.floor(s.distance)}</span> m</div>
-            <p>Best: {Math.floor(s.best)} m</p>
+            <div className="final"><span className="value">{Math.floor(s.score)}</span> pts</div>
+            <p>{Math.floor(s.distance)} m · Best: {Math.floor(s.best)} pts</p>
             <p className="cta">Press R to try again</p>
           </div>
         </div>

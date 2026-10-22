@@ -12,7 +12,7 @@ that tests mathematically prove the absence of bugs. Failed checks stay visible 
 - Forward is −Z; only Z rotation is controllable. W accelerates; no braking/reversing.
 - Arrow keys always apply roll torque. A/D remain independent surface steering.
 - Forces/torques drive the dynamic Rapier body; contacts resist grounded rolls.
-- Suction consumes fuel and heats much faster on floors; overheat has recovery hysteresis.
+- Suction consumes more fuel on floors and heats at one rate everywhere; overheat has recovery hysteresis.
 - Construct movement plans before geometry, using the same movement constants and finite resources.
 - Validation is deterministic physics/kinematics, never reinforcement learning or a player-driving AI.
 - Debug URLs select seed and challenge; generation and rendering must remain bounded.
@@ -218,6 +218,71 @@ still completes. Streaming bounds derive from configuration instead of fixed num
 floor share and centre slalom blocks, both mirrored walls, and the start buffer.
 Full run: **210 tests / 24 suites pass**; production build passes. Browser (reduced motion enabled):
 the menu car turns visibly; a slalom run shows centre blocks and "slalom left in 24 m" cues.
+
+## 12. Barrier jumps, faster difficulty, stronger suction and Railway deploy — DONE
+
+- [x] New `hurdle` challenge: full-width floor barriers jumped with a lift pulse and no suction.
+- [x] Difficulty ramps faster (`difficultyScale` 850 → 250, `difficultyCurve` 2 → 1.5).
+- [x] Suction range 2.5 → 3 m (+20%).
+- [x] Wall/ceiling/airborne suction heats at the floor rate (1.5 → 24 units/s).
+- [x] Dockerfile (Vite build, then nginx on `$PORT`), `railway.toml`, deploy to the linked service.
+
+Hurdles: 1–3 barriers (count and 1–2 m height scale with difficulty), spaced 125 m so each launch
+keeps the 2 s reaction interval after the previous landing. The barriers are planner obstacles, so
+every replay (timing shifts, 24/28/32 m/s entries) includes their colliders. A test confirms that
+driving into one without lifting triggers the crash rule.
+
+Difficulty is now about 42% at 200 m (the old 1 km value), 63% at 500 m, 78% at 1 km and 85% at 5 km.
+
+Equal heat limits a held surface run to ~4.2 s. With the old 150–210 m traversals, every
+ceiling, wall and multiple candidate overheated and fell back to flat road. Traversals are now
+80–88 m (+5 m on walls, which attach later). They must be long enough for the 2 s reaction interval
+after attaching and short enough to end before overheating; validated peak heat is 82–92. Ceiling
+then wall cannot fit both reaction intervals in one heat budget, so `multiple` now drops from the
+ceiling, cools during a 110 m floor leg, then crosses the wall. Seeds 1/42/233 over 4 km: no
+rejected candidates or fallbacks.
+
+Test changes, with reasons: scripted ceiling/wall holds shortened to stay under the heat limit
+(6 s → 2–3 s, ceiling legs started nearer the handover); the 25 s surface-hold test became "stays
+attached until the floor-rate overheat"; the origin test zeroes heat each step so it still spans two
+rebases; the floor-share bound moved from <55% to <68%, since surface time is about halved by the
+heat limit (surface + air must still exceed 30%); the centre-block count excludes full-width
+barriers; difficulty tests read the configured constants. Barrier jumps are added to the
+planner and decoration suites.
+Full run: **215 tests / 24 suites pass**; `npm run build` passes. Docker image built and run locally
+with `PORT=9123`: index, deep links and hashed assets serve, unknown assets return 404, and the game
+boots in the browser (`?template=hurdle` shows "Barrier jumps" and a full-width barrier).
+
+## 13. Scarcer fuel, points with flip bonuses and the real car model — DONE
+
+- [x] One fuel cell per chunk (was two, ~36 m apart across every chunk boundary).
+- [x] Tank 5 → 2.5 units. A 1.25 tank was tried first and rejected (see below).
+- [x] Score in points: 1 per metre plus 100 × flips² per safe landing after full airborne rolls.
+- [x] Car rendered from `models/car.glb`.
+
+Fuel: the cell sits 12 m into each chunk, before its first maneuver. Launch reserve is 1 → 0.25 and
+exit reserve 1 → 0.1, since the next chunk opens with a cell. At a 1.25 tank every ceiling-to-wall,
+long-flight and 3-barrier chunk failed validation (the car ran dry or ended empty) and would have
+fallen back to flat road. At 2.5 every family validates; seeds 1/42/233 over 4 km: no fallbacks.
+
+Score: `GameSession` accumulates signed roll while airborne and pays on touchdown unless that step
+ends the run. A landing within 25° (the roll-assist angle) of a full roll completes it. The HUD shows
+points, a "Flip / Double flip / Triple flip +N" popup, and points plus metres on game over. Checked in
+the browser: one scripted roll paid +100 (91 m → 191 pts); a later jump that hit a slalom block paid
+nothing.
+
+Car: the GLB is loaded once (awaited alongside the opening terrain), turned to face −Z, scaled to the
+collider length (3.4 m; width then matches at 1.8 m), centred, and rested on the collider floor. Its
+wheel nodes spin with forward speed. Thruster, suction and underglow effects remain; the side roll
+nozzles show only while firing because they sit outside the new bodywork. The roof is ~0.3 m taller
+than the collider.
+
+Test changes, with reasons: fixed 5-unit fuel figures now derive from `CONFIG.fuel.capacity`; the
+seam test refills each step to hold top speed longer than a tank lasts; scripted ceiling/wall
+transitions keep W off on surfaces, where cruise is free and suction needs the fuel; pickup counts
+moved from 2 to 1 per chunk. New tests: flip counting and combo points, payout after a safe landing,
+and no payout for a partial roll or a roof landing.
+Full run: **218 tests / 24 suites pass**; `npm run build` passes and bundles the model.
 
 ## Evidence / issues
 

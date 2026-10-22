@@ -115,6 +115,7 @@ describe('slab seams', () => {
     run(sim, 0.3);
     let maxY = 0, minY = 10, minSpeedAfter = Infinity;
     for (let i = 0; i < 60 * 8; i++) {
+      sim.fuel.refill(); // hold top speed for the whole seam run, longer than one tank lasts
       run(sim, 1 / 60, { accelerate: true });
       const y = sim.vehicle.position.y;
       maxY = Math.max(maxY, y);

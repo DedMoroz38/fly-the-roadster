@@ -1,17 +1,29 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import carUrl from '../../models/car.glb?url';
 import { CONFIG } from '../game/config';
 
+let carBody: Promise<THREE.Object3D> | null = null;
+
+/** Loads the car mesh once; every CarModel clones it. Await before building views to avoid pop-in. */
+export function loadCarBody(): Promise<THREE.Object3D> {
+  carBody ??= new GLTFLoader().loadAsync(carUrl).then(gltf => gltf.scene);
+  return carBody;
+}
+
 /**
- * Custom low-poly futuristic roadster. Local frame: -Z forward, +Y up (wheels at -Y).
- * Exposes setters for effects (thrusters, suction) so the renderer can drive them.
+ * Roadster built from models/car.glb, scaled to the physics box. Local frame: -Z forward,
+ * +Y up (wheels at -Y). Exposes setters for effects (thrusters, suction) so the renderer can drive them.
  */
 export class CarModel {
   readonly group = new THREE.Group();
-  private wheels: THREE.Mesh[] = [];
+  private wheels: THREE.Object3D[] = [];
+  private wheelRadius = 0.3;
   private liftFlames: THREE.Mesh[] = [];
   private rearFlames: THREE.Mesh[] = [];
   private rollThrusters: {
     flames: THREE.Mesh[];
+    nozzles: THREE.Mesh[];
     flameMat: THREE.MeshBasicMaterial;
     nozzleMat: THREE.MeshStandardMaterial;
   }[] = [];
@@ -27,68 +39,15 @@ export class CarModel {
 
   constructor() {
     const he = CONFIG.car.halfExtents;
+    // Headless tests have no loader environment; they exercise the effects only.
+    if (typeof document !== 'undefined') loadCarBody().then(body => this.attachBody(body), error => console.error('Car model failed to load', error));
 
-    // Body: side profile extruded across the car's width.
-    const profile = new THREE.Shape();
-    const pts: [number, number][] = [
-      [-1.7, -0.18], [-1.72, -0.04], [-0.7, 0.1], [-0.25, 0.33], [0.55, 0.33], [1.35, 0.12], [1.72, 0.1], [1.72, -0.18],
-    ];
-    profile.moveTo(pts[0][0], pts[0][1]);
-    for (const [x, y] of pts.slice(1)) profile.lineTo(x, y);
-    profile.closePath();
-    const width = he.x * 2 - 0.3;
-    const bodyGeo = new THREE.ExtrudeGeometry(profile, {
-      depth: width, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.08, bevelSegments: 2,
-    });
-    bodyGeo.rotateY(-Math.PI / 2);
-    bodyGeo.translate(width / 2, 0, 0);
-    bodyGeo.computeVertexNormals();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xc9d3e3, metalness: 0.75, roughness: 0.28 });
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    this.group.add(body);
-
-    // Cabin glass.
-    const glass = new THREE.Mesh(
-      new THREE.BoxGeometry(width * 0.82, 0.16, 0.95),
-      new THREE.MeshStandardMaterial({ color: 0x0a1a2e, metalness: 0.9, roughness: 0.05, emissive: 0x06223a }),
-    );
-    glass.position.set(0, 0.3, 0.12);
-    this.group.add(glass);
-
-    // Neon accent strips along the sides and a rear light bar.
+    // Neon underglow strips; they switch to violet while suction is held.
     this.accentMat = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00e5ff, emissiveIntensity: 1.6 });
     for (const side of [-1, 1]) {
-      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 3.0), this.accentMat);
-      strip.position.set(side * (width / 2 + 0.09), -0.02, 0);
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 2.2), this.accentMat);
+      strip.position.set(side * (he.x - 0.25), -he.y + 0.12, 0);
       this.group.add(strip);
-    }
-    const tail = new THREE.Mesh(
-      new THREE.BoxGeometry(width, 0.06, 0.04),
-      new THREE.MeshStandardMaterial({ color: 0xff2a6d, emissive: 0xff2a6d, emissiveIntensity: 2 }),
-    );
-    tail.position.set(0, 0.04, 1.82);
-    this.group.add(tail);
-    const head = new THREE.Mesh(
-      new THREE.BoxGeometry(width * 0.9, 0.04, 0.04),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xe8f6ff, emissiveIntensity: 2 }),
-    );
-    head.position.set(0, -0.05, -1.8);
-    this.group.add(head);
-
-    // Wheels.
-    const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.28, 18);
-    wheelGeo.rotateZ(Math.PI / 2);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x15171c, roughness: 0.6, metalness: 0.3 });
-    const hubMat = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00a8c0, emissiveIntensity: 1 });
-    for (const x of [-1, 1]) {
-      for (const z of [-1.15, 1.15]) {
-        const w = new THREE.Mesh(wheelGeo, wheelMat);
-        w.position.set(x * (he.x - 0.12), -he.y + 0.3, z);
-        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.3, 8).rotateZ(Math.PI / 2), hubMat);
-        w.add(hub);
-        this.group.add(w);
-        this.wheels.push(w);
-      }
     }
 
     // Thruster flames: lift (under the belly, pointing away from the roof) and rear.
@@ -131,7 +90,7 @@ export class CarModel {
         color: 0x343b4b, metalness: 0.8, roughness: 0.3,
         emissive: color, emissiveIntensity: 0.12, side: THREE.DoubleSide,
       });
-      const flames: THREE.Mesh[] = [];
+      const flames: THREE.Mesh[] = [], nozzles: THREE.Mesh[] = [];
       for (const side of [-1, 1]) {
         const exhaustY = index === 0 ? -side : side;
         const sideName = side < 0 ? 'left' : 'right';
@@ -143,6 +102,7 @@ export class CarModel {
           nozzle.position.set(side * (he.x + 0.07), exhaustY * 0.2, z);
           nozzle.rotation.z = exhaustY < 0 ? Math.PI : 0;
           this.group.add(nozzle);
+          nozzles.push(nozzle);
 
           const flame = new THREE.Mesh(rollFlameGeo, flameMat);
           flame.name = `roll-${control}-flame-${sideName}-${direction}-${end}`;
@@ -152,7 +112,7 @@ export class CarModel {
           flames.push(flame);
         }
       }
-      this.rollThrusters.push({ flames, flameMat, nozzleMat });
+      this.rollThrusters.push({ flames, nozzles, flameMat, nozzleMat });
     }
 
     // Suction emitter ring under the car.
@@ -211,9 +171,11 @@ export class CarModel {
   setRollThrust(left: number, right: number) {
     for (const [index, thrust] of [left, right].entries()) {
       const intensity = THREE.MathUtils.clamp(thrust, 0, 1);
-      const { flames, flameMat, nozzleMat } = this.rollThrusters[index];
+      const { flames, nozzles, flameMat, nozzleMat } = this.rollThrusters[index];
       flameMat.opacity = intensity * 0.9;
       nozzleMat.emissiveIntensity = 0.12 + intensity * 2.6;
+      // Nozzles sit outside the model's bodywork, so they only appear while their channel fires.
+      for (const nozzle of nozzles) nozzle.visible = intensity > 0;
       for (const flame of flames) {
         flame.visible = intensity > 0;
         const flicker = Math.sin(this.time * 57 + flame.position.z * 4);
@@ -242,6 +204,28 @@ export class CarModel {
   update(dt: number, forwardSpeed: number) {
     this.time += dt;
     this.attachFlash = Math.max(0, this.attachFlash - dt * 3);
-    for (const w of this.wheels) w.rotation.x -= (forwardSpeed / 0.3) * dt;
+    // The model faces +Z inside its turned-around root, so forward travel spins its wheels positively.
+    for (const w of this.wheels) w.rotation.x += (forwardSpeed / this.wheelRadius) * dt;
+  }
+
+  /** Fits the model's length to the collider, centres it and rests the wheels on the collider floor. */
+  private attachBody(template: THREE.Object3D) {
+    const he = CONFIG.car.halfExtents;
+    const body = template.clone(true);
+    body.rotation.y = Math.PI;
+    const root = new THREE.Group();
+    root.add(body);
+    const box = new THREE.Box3().setFromObject(root);
+    const size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
+    const scale = (he.z * 2) / size.z;
+    root.scale.setScalar(scale);
+    root.position.set(-centre.x * scale, -he.y - box.min.y * scale, -centre.z * scale);
+    body.traverse(o => {
+      if (/wheel/i.test(o.name)) this.wheels.push(o);
+      if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;
+    });
+    const wheel = this.wheels[0] && new THREE.Box3().setFromObject(this.wheels[0]).getSize(new THREE.Vector3());
+    if (wheel) this.wheelRadius = (wheel.y / 2) * scale;
+    this.group.add(root);
   }
 }

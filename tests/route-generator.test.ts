@@ -75,8 +75,10 @@ describe('constructive seeded course', () => {
   it('raises difficulty smoothly without exceeding the configured capability envelope', () => {
     expect(difficultyAt(0)).toBe(0);
     expect(difficultyAt(-100)).toBe(0);
-    let previous = 0;
-    for (let distance = 100; distance < 1e7; distance *= 1.15) {
+    // The opening ramp is steep by design; smoothness is checked from 100 m on.
+    let previous = difficultyAt(100);
+    expect(previous).toBeGreaterThan(0);
+    for (let distance = 115; distance < 1e7; distance *= 1.15) {
       const d = difficultyAt(distance);
       expect(d).toBeGreaterThan(previous);
       expect(d).toBeLessThan(1);

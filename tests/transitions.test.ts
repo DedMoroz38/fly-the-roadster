@@ -32,7 +32,7 @@ describe('scripted transitions (as a player would do them)', () => {
     let minY = Infinity;
     const track = () => (minY = Math.min(minY, sim.vehicle.position.y));
     until(sim, () => (track(), sim.distance > 50), { accelerate: true });
-    const boostSeconds = sim.time + 0.55 + 6;
+    const boostSeconds = sim.time + 0.55;
     expect(sim.vehicle.mode).toBe('grounded');
     run(sim, 0.55, { accelerate: true, thrust: true });
     expect(sim.vehicle.mode).toBe('airborne');
@@ -44,10 +44,13 @@ describe('scripted transitions (as a player would do them)', () => {
     sim.step(controls({ suction: true }));
     until(sim, () => (track(), sim.vehicle.mode === 'attached'), { suction: true }, 3);
     expect(sim.vehicle.supportSurface).toBe('ceiling');
-    run(sim, 6, { suction: true, accelerate: true });
+    // Surface suction heats as fast as the floor, so a held run lasts under four seconds.
+    // Cruise is free; W stays off on the ceiling so the small tank covers suction.
+    run(sim, 3, { suction: true });
     expect(sim.vehicle.mode).toBe('attached');
     expect(sim.vehicle.supportSurface).toBe('ceiling');
-    expect(sim.distance).toBeGreaterThan(250);
+    expect(sim.vehicle.suctionOverheated).toBe(false);
+    expect(sim.distance).toBeGreaterThan(150);
     expect(minY).toBeGreaterThan(0);
     // Sustained W, lift, roll and ceiling suction all spend the same finite tank.
     const used = boostSeconds * CONFIG.thrusters.boostFuelRate + 0.55 * CONFIG.thrusters.liftFuelRate
@@ -62,7 +65,8 @@ describe('scripted transitions (as a player would do them)', () => {
         { surface: 'ceiling', d0: -20, d1: 140 },
         { surface: 'left', d0: 110, d1: 600 },
       ],
-      { x: 0, y: H - 1.5, z: -10 },
+      // Start near the handover: ceiling and wall share one suction heat budget.
+      { x: 0, y: H - 1.5, z: -60 },
     );
     setRoll(sim, Math.PI);
     sim.step(controls({ suction: true }));
@@ -79,10 +83,11 @@ describe('scripted transitions (as a player would do them)', () => {
     expect(sim.vehicle.supportSurface).toBe('left');
     const y = sim.vehicle.position.y;
     expect(y).toBeGreaterThan(3); // caught well above the bottom edge of the wall
-    run(sim, 6, { suction: true, accelerate: true });
+    run(sim, 2, { suction: true, accelerate: true });
     expect(sim.vehicle.mode).toBe('attached');
     expect(sim.vehicle.supportSurface).toBe('left');
-    expect(sim.distance).toBeGreaterThan(300);
+    expect(sim.vehicle.suctionOverheated).toBe(false);
+    expect(sim.distance).toBeGreaterThan(170);
   });
 
   it('ceiling -> right wall works the same way mirrored', async () => {
@@ -91,7 +96,7 @@ describe('scripted transitions (as a player would do them)', () => {
         { surface: 'ceiling', d0: -20, d1: 140 },
         { surface: 'right', d0: 110, d1: 600 },
       ],
-      { x: 0, y: H - 1.5, z: -10 },
+      { x: 0, y: H - 1.5, z: -60 },
     );
     setRoll(sim, Math.PI);
     sim.step(controls({ suction: true }));
@@ -104,7 +109,7 @@ describe('scripted transitions (as a player would do them)', () => {
     sim.step(controls({ suction: true }));
     until(sim, () => sim.vehicle.mode === 'attached', { suction: true }, 3);
     expect(sim.vehicle.supportSurface).toBe('right');
-    run(sim, 5, { suction: true, accelerate: true });
+    run(sim, 2, { suction: true, accelerate: true });
     expect(sim.vehicle.supportSurface).toBe('right');
   });
 
@@ -149,12 +154,12 @@ describe('scripted transitions (as a player would do them)', () => {
         { surface: 'ceiling', d0: -20, d1: 120 },
         { surface: 'left', d0: 185, d1: 600 },
       ],
-      { x: -4.5, y: CONFIG.corridor.height - 1.5, z: -10 },
+      { x: -4.5, y: CONFIG.corridor.height - 1.5, z: -60 },
     );
     setRoll(sim, Math.PI);
     sim.step(controls({ suction: true }));
     until(sim, () => sim.vehicle.mode === 'attached', { suction: true }, 2);
-    until(sim, () => sim.distance > 122, { suction: true, accelerate: true });
+    until(sim, () => sim.distance > 122, { suction: true });
     sim.step(controls({ suction: false })); // release
     // 65 m with no surface before the wall starts: roll upright and thrust to hold altitude.
     // Thrust only once the roof points mostly up (thrust pushes away from the wheels).
@@ -170,7 +175,7 @@ describe('scripted transitions (as a player would do them)', () => {
     sim.step(controls({ suction: true }));
     until(sim, () => sim.vehicle.mode === 'attached', { suction: true }, 3);
     expect(sim.vehicle.supportSurface).toBe('left');
-    run(sim, 4, { suction: true, accelerate: true });
+    run(sim, 2, { suction: true }); // heat carried from the ceiling leaves about two seconds
     expect(sim.vehicle.supportSurface).toBe('left');
   });
 });

@@ -71,6 +71,10 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
 .route-cue { position: absolute; top: 148px; left: 22px; max-width: min(420px, calc(100% - 44px)); padding: 10px 14px; background: var(--panel); border-left: 3px solid var(--cyan); border-radius: 0 7px 7px 0; }
 .route-cue .label { display: block; margin: 0 0 5px; color: var(--cyan); text-transform: uppercase; }
 .route-cue strong { display: block; font-size: 14px; font-weight: 500; line-height: 1.4; }
+.flip-award { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; pointer-events: none; animation: flip-pop 1.4s ease-out forwards; }
+.flip-award .flip-name { font-size: 15px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--cyan); }
+.flip-award .flip-points { font-size: 48px; font-weight: 700; color: var(--text); text-shadow: 0 0 18px rgba(47, 212, 255, 0.6); }
+@keyframes flip-pop { 0% { opacity: 0; transform: translate(-50%, 12px) scale(0.85); } 12% { opacity: 1; transform: translate(-50%, 0) scale(1.05); } 75% { opacity: 1; transform: translate(-50%, -6px) scale(1); } 100% { opacity: 0; transform: translate(-50%, -18px) scale(1); } }
 .terrain-status { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); padding: 10px 16px; max-width: 60%; border-radius: 7px; background: var(--panel); color: #ffe398; font-size: 13px; text-align: center; }
 .debug-panel { position: absolute; top: 42px; right: 16px; width: 300px; padding: 12px 14px; background: rgba(5, 9, 20, .92); border: 1px solid #a8ff6655; border-radius: 8px; font-size: 11px; }
 .debug-title { display: flex; justify-content: space-between; align-items: center; color: #d6ff42; font-size: 11px; letter-spacing: .09em; margin-bottom: 10px; }
@@ -144,4 +148,4 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
   .main-menu__controls { margin-top: 14px; }
   .main-menu__start { padding: 9px 16px; }
 }
-@media (prefers-reduced-motion: reduce) { .main-menu__start { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .main-menu__start { transition: none; } .flip-award { animation: none; } }

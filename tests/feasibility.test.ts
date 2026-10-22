@@ -56,7 +56,7 @@ describe('published terrain remains traversable in one continuous physics world'
         }
         expect(sim.distance).toBeGreaterThanOrEqual(6000);
         expect(chunkId).toBeGreaterThan(8);
-        expect(sim.refuelCount).toBeGreaterThanOrEqual(chunkId * 2);
+        expect(sim.refuelCount).toBeGreaterThanOrEqual(chunkId);
       } finally { sim.dispose(); }
     }, 60000);
   }

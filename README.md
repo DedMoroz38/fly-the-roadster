@@ -40,15 +40,26 @@ Forces and torques drive the dynamic body, including roll against ground contact
 are locked. A/D steer independently on surfaces; the arrows fire the visible roll-thruster pairs.
 
 Floors support the car by gravity. Walls and ceilings need E held for suction with the wheels facing them.
-Attraction requires a surface within 2.5 m; attachment requires a gap of at most 0.4 m and alignment.
-Acceleration, lift, roll and suction share a five-unit tank. W / ↑ consumes 0.4 units/s;
-automatic cruise remains free, including with an empty tank. Green cells refill it.
+Attraction requires a surface within 3 m; attachment requires a gap of at most 0.4 m and alignment.
+Acceleration, lift, roll and suction share a 2.5-unit tank (2.5 s of lift). W / ↑ consumes 0.4 units/s;
+automatic cruise remains free, including with an empty tank. Each chunk has one green fuel cell near
+its start, collected before its first maneuver; it refills the tank.
 Landing on the roof ends the run. Airborne barrel rolls and wheels-first ceiling attachment are safe.
 
-Floor suction heats at 24 units/s, uses extra fuel and adds drag. Wall/ceiling suction heats at
-1.5 units/s. The HUD warns at 75, locks suction off at 100, and allows reactivation below 35.
+Suction heats at 24 units/s on every surface and in the air; floor suction also uses extra fuel and
+adds drag. The HUD warns at 75, locks suction off at 100, and allows reactivation below 35.
 Releasing E cools at 18 units/s. If E stays held through an overheat, suction resumes only after heat
-drops below 35 and fuel is available. Wall and ceiling traversal remain practical for extended periods.
+drops below 35 and fuel is available. A held wall or ceiling run therefore lasts about 4 seconds.
+
+## Score
+
+You earn 1 point per metre of furthest progress. Full rolls in a single airborne stretch pay a bonus
+when you land safely: 100 × flips², so 1 flip pays 100, 2 pay 400 and 3 pay 900. A landing up to 25°
+short of the last roll still counts. Crashing or landing on the roof forfeits that jump's bonus.
+Tune it in `CONFIG.score`.
+
+The car is `models/car.glb`, scaled to the physics box. It is about 0.3 m taller than the collider,
+so the roof can visually overlap low geometry without touching it.
 
 ## Terrain and validation
 
@@ -59,20 +70,23 @@ validated recovery-road fallback. No controller drives the player's car; validat
 worker and tests.
 
 Supported procedural families are floor runs, short flight gaps, ceiling crossings, either wall,
-ceiling-to-wall transitions (mirrored to either wall), and extended surface-free flight. Seeded
+ceiling-to-wall transitions (mirrored to either wall, with a short floor leg between them so suction
+can cool), extended surface-free flight, and barrier jumps: 1–3 full-width floor barriers, 1–2 m
+tall, cleared with a lift pulse and no suction. Barrier count and height rise with difficulty. Seeded
 obstacles mount on floors, ceilings and both walls, including the opening road. Their physical
 colliders are part of world generation: placement respects the intended route and reaction margins,
 then the complete decorated chunk is replayed and validated again. Unreachable additions are rejected.
 
-Pacing keeps the car off plain floor for most of a run. Floor runs are slaloms: the certified route
+Floor runs are slaloms: the certified route
 weaves between lanes and obstacles fill the centre lanes it vacates, so A/D steering is required.
 The 2 s reaction interval is measured from the latest touchdown, carried across chunk boundaries,
-so lead-ins are only as long as that interval needs. Recovery after a maneuver is 2 s at top speed,
-and wall/ceiling traversals are 150–210 m. On seeds 1/42/233/7/19 over 4 km, plain floor is 32–41%
-of route time (plus 6–11% slalom), versus 71–81% floor before this tuning.
+so lead-ins are only as long as that interval needs. Recovery after a maneuver is 2 s at top speed.
+Wall/ceiling traversals are 80–93 m: long enough for the 2 s reaction interval after attaching,
+short enough to finish before suction overheats. On seeds 1/42/233 over 3 km, floor and slalom are
+about 62–66% of route time, surfaces about 20%, and flight about 18%.
 The opening road is 110–130 m and leads into two requested challenge chunks; the first maneuver
-arrives after roughly 6–7.5 seconds. Difficulty values over the first kilometre are 50% higher than
-the earlier tuning (about 28% at 500 m and 42% at 1 km) and keep increasing afterward.
+arrives after roughly 6–7.5 seconds. Difficulty ramps quickly: about 42% at 200 m, 63% at 500 m,
+78% at 1 km and 85% at 5 km.
 
 The validation contract includes a minimum 2 s preparation interval, ±0.15 s action/suction timing
 checks, and entry speeds of 24/28/32 m/s. Timing variants allow ordinary steering corrections on
@@ -89,7 +103,7 @@ distance stays continuous. If the worker falls behind, simulation waits safely f
 - `/?seed=42&debug=1` — repeatable course with speed, fuel, heat, attachment, difficulty, chunk seed,
   validation margins and route overlay.
 - `/?seed=42&debug=1&template=ceiling` — force one procedural challenge family.
-- Templates: `normal`, `gap`, `ceiling`, `wall-left`, `wall-right`, `multiple`, `flight`.
+- Templates: `normal`, `gap`, `ceiling`, `wall-left`, `wall-right`, `multiple`, `flight`, `hurdle`.
 - R restarts the same seed and template. F3 toggles debug information during play.
 
 Tune movement/resources in `src/game/config.ts`, maneuver limits in
@@ -103,6 +117,15 @@ candidate rejection, three continuous mixed 6 km routes, 50 km of bounded genera
 continuous normal-road replay. Origin tests compare physics at 0, 50 km and 10 million logical metres;
 render tests preserve fractional geometry at 1 billion metres. These are engineering checks, not an
 exhaustive proof over every seed and possible input.
+
+## Deploy
+
+The `Dockerfile` builds the Vite bundle and serves `dist/` with nginx on `$PORT` (default 8080).
+`railway.toml` tells Railway to use it. Deploy the linked service with `railway up`.
+
+```bash
+docker build -t fly-the-roadster . && docker run -p 8080:8080 fly-the-roadster
+```
 
 ## Layout
 

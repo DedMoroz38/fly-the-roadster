@@ -195,8 +195,8 @@ describe('fuel pickups', () => {
   it('collecting a pickup refills the tank and consumes it once', async () => {
     const sim = await makeSim([{ surface: 'floor', d0: -20, d1: 500 }]);
     try {
-      sim.fuel.consume(3, 1);
-      expect(sim.fuel.value).toBeCloseTo(2);
+      sim.fuel.consume(1, CONFIG.fuel.capacity / 2);
+      expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity / 2);
       sim.level.activePickups!.set(1, { id: 1, x: 0, y: 1.3, d: sim.distance + 40 });
       let collectedAt = -1;
       const steps = Math.round(3 / sim.dt);

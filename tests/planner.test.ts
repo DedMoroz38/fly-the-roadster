@@ -4,7 +4,7 @@ import { initialReachableState, planChunk, type ScenarioKind } from '../src/game
 
 beforeAll(initPhysics);
 describe('constructive real-physics maneuver planning', () => {
-  for (const kind of ['normal', 'gap', 'ceiling', 'wall-left', 'wall-right', 'multiple', 'flight'] as ScenarioKind[]) {
+  for (const kind of ['normal', 'gap', 'ceiling', 'wall-left', 'wall-right', 'multiple', 'flight', 'hurdle'] as ScenarioKind[]) {
     it(`validates ${kind} with actual fuel, heat and human timing tolerance`, () => {
       const result = planChunk({ id: 0, seed: 123, d0: 0, difficulty: 1, kind, entry: initialReachableState() });
       expect(result.validation.reasons).toEqual([]);

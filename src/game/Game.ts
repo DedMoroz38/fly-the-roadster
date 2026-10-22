@@ -1,6 +1,7 @@
 import { FixedStepper } from '../core/fixedStep';
 import { InputManager } from './input';
 import { Simulation, initPhysics } from './simulation';
+import { loadCarBody } from '../render/carModel';
 import { Course } from './course/course';
 import { WorkerChunkSource } from './course/workerSource';
 import { SCENARIOS } from './course/routeGenerator';
@@ -42,7 +43,8 @@ export class Game {
     const template = requested && SCENARIOS.includes(requested) ? requested : undefined;
     const initialSource = new WorkerChunkSource(this.seed, { template });
     this.terrainSource = initialSource;
-    try { await initialSource.ready; }
+    // The car mesh loads alongside the opening terrain; a failed load is logged, not fatal.
+    try { await Promise.all([initialSource.ready, loadCarBody().catch(() => undefined)]); }
     catch (error) { initialSource.dispose(); if (!this.disposed) throw error; return; }
     if (this.disposed) { initialSource.dispose(); return; }
     this.renderer = new GameRenderer(this.host);

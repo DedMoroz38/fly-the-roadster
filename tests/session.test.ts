@@ -2,9 +2,10 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { initPhysics, Simulation } from '../src/game/simulation';
 import { StaticLevel } from '../src/game/physics/level';
 import { Course } from '../src/game/course/course';
-import { FailureMonitor, GameSession } from '../src/game/session';
+import { completedFlips, FailureMonitor, flipPoints, GameSession } from '../src/game/session';
 import { controls, setRoll } from './helpers';
 import { CONFIG } from '../src/game/config';
+import { wrapAngle } from '../src/core/math';
 import type { Slab } from '../src/game/surfaces';
 
 beforeAll(async () => {
@@ -20,6 +21,59 @@ const staticSession = (slabs: Omit<Slab, 'id'>[], spawn?: { x: number; y: number
 function steps(s: GameSession, seconds: number, c = {}) {
   for (let i = 0; i < Math.round(seconds * 60); i++) s.step(controls(c));
 }
+
+describe('points and flip bonuses', () => {
+  const jumpAndRoll = (s: GameSession, rollSeconds: number) => {
+    steps(s, 0.6, { thrust: true });
+    steps(s, rollSeconds, { rollLeft: true });
+    for (let i = 0; i < 600 && s.sim.vehicle.mode === 'airborne'; i++) s.step(controls());
+  };
+
+  it('pays a growing combo bonus per completed airborne flip, with a small landing tolerance', () => {
+    expect(completedFlips(Math.PI)).toBe(0);
+    expect(completedFlips(2 * Math.PI - 0.6)).toBe(0);
+    expect(completedFlips(2 * Math.PI - 0.3)).toBe(1);
+    expect(completedFlips(-2 * Math.PI)).toBe(1);
+    expect(completedFlips(4 * Math.PI + 0.5)).toBe(2);
+    expect([1, 2, 3].map(flipPoints)).toEqual([100, 400, 900]);
+  });
+
+  it('scores a point per metre and adds the bonus after a safe landing', () => {
+    const s = staticSession([{ surface: 'floor', d0: -50, d1: 2000 }]);
+    steps(s, 1);
+    expect(s.score).toBeCloseTo(s.distance, 9);
+    jumpAndRoll(s, 1.25);
+    expect(s.state).toBe('running');
+    expect(s.lastFlip).toMatchObject({ flips: 1, points: 100 });
+    expect(s.score).toBeCloseTo(s.distance + 100, 9);
+    expect(s.snapshot().score).toBe(s.score);
+    s.restart();
+    expect(s.score).toBe(0);
+    expect(s.lastFlip).toBeNull();
+    s.sim.dispose();
+  });
+
+  it('pays nothing for a partial roll or a landing that ends the run', () => {
+    const partial = staticSession([{ surface: 'floor', d0: -50, d1: 2000 }]);
+    jumpAndRoll(partial, 0.3);
+    expect(partial.lastFlip).toBeNull();
+    partial.sim.dispose();
+    // One and a half rolls in the air lands on the roof: the run ends and the flip is lost.
+    const roof = staticSession([{ surface: 'floor', d0: -50, d1: 2000 }]);
+    steps(roof, 0.9, { thrust: true }); // enough airtime for one and a half rolls
+    let rolled = 0, previous = roof.sim.vehicle.roll;
+    for (let i = 0; i < 600 && roof.state === 'running'; i++) {
+      roof.step(controls({ rollLeft: rolled < 3 * Math.PI - 0.45 }));
+      rolled += wrapAngle(roof.sim.vehicle.roll - previous);
+      previous = roof.sim.vehicle.roll;
+    }
+    expect(rolled).toBeGreaterThan(2 * Math.PI);
+    expect(roof.failReason).toBe('flipped');
+    expect(roof.lastFlip).toBeNull();
+    expect(roof.score).toBeCloseTo(roof.distance, 9);
+    roof.sim.dispose();
+  });
+});
 
 describe('GameSession flow', () => {
   it('waits at the main menu until explicitly started, then cruises automatically', () => {

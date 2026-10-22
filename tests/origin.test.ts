@@ -121,6 +121,8 @@ describe('floating physics origin', () => {
     sim.vehicle.body.setLinvel({ x: 0, y: 0, z: -24 }, true);
     try {
       for (let i = 0; i < 1200; i++) {
+        // Heat limits are covered elsewhere; keep suction cool so the hold spans two rebases.
+        sim.vehicle.suctionHeat = 0;
         sim.step({ ...emptyControls(), suction: true });
         if (i > 10) {
           expect(sim.vehicle.mode).toBe('attached');
@@ -129,8 +131,8 @@ describe('floating physics origin', () => {
       }
       expect(sim.originDistance).toBeGreaterThanOrEqual(512);
       expect(sim.vehicle.suctionOverheated).toBe(false);
-      expect(sim.vehicle.suctionHeat).toBeCloseTo(30, 4);
-      expect(sim.fuel.value).toBeCloseTo(4.2, 4);
+      expect(sim.vehicle.suctionHeat).toBeCloseTo(CONFIG.suction.heatRate / 60, 4);
+      expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - 20 * CONFIG.suction.fuelRate, 4);
     } finally { sim.dispose(); }
   });
 });

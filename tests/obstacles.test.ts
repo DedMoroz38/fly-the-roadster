@@ -35,7 +35,7 @@ describe('solid obstacle lifecycle', () => {
   });
 });
 describe('certified procedural decoration', () => {
-  for (const kind of ['normal', 'gap', 'ceiling', 'wall-left', 'wall-right', 'multiple', 'flight'] as ScenarioKind[]) {
+  for (const kind of ['normal', 'gap', 'ceiling', 'wall-left', 'wall-right', 'multiple', 'flight', 'hurdle'] as ScenarioKind[]) {
     it(`keeps ${kind} physically feasible after adding optional geometry`, () => {
       const base = planChunk({ id: 0, seed: 217, d0: 0, kind, difficulty: 1, entry: initialReachableState() });
       const decorated = decorateChunk(base);
@@ -51,6 +51,33 @@ describe('certified procedural decoration', () => {
       }
     });
   }
+  it('hurdle barriers block the full width, grow with difficulty and are cleared by lift alone', () => {
+    const easy = planChunk({ id: 1, seed: 31, d0: 0, kind: 'hurdle', difficulty: 0, entry: initialReachableState() });
+    const hard = planChunk({ id: 1, seed: 31, d0: 0, kind: 'hurdle', difficulty: 1, entry: initialReachableState() });
+    for (const chunk of [easy, hard]) {
+      expect(chunk.validation.reasons).toEqual([]);
+      expect(chunk.slabs.every(s => s.surface === 'floor')).toBe(true);
+      for (const o of chunk.obstacles) {
+        expect(o.half.x).toBe(CONFIG.corridor.halfWidth);
+        expect(o.y - o.half.y).toBeCloseTo(0, 9);
+      }
+      expect(chunk.witness.controls.some(c => c.thrust)).toBe(true);
+      expect(chunk.witness.controls.some(c => c.suction)).toBe(false);
+    }
+    expect(easy.obstacles).toHaveLength(1);
+    expect(hard.obstacles).toHaveLength(3);
+    expect(hard.obstacles[0].half.y).toBeGreaterThan(easy.obstacles[0].half.y);
+  });
+  it('driving into a hurdle barrier without lifting crashes', () => {
+    const chunk = planChunk({ id: 1, seed: 31, d0: 0, kind: 'hurdle', difficulty: 0, entry: initialReachableState() });
+    const sim = new Simulation({ spawn: { x: 0, y: CONFIG.car.halfExtents.y + 0.02, z: -10 },
+      createLevel: w => new StaticLevel(w, chunk.slabs, [], chunk.obstacles) });
+    const monitor = new FailureMonitor(); let failed = null;
+    for (let i = 0; i < 600 && !failed; i++) { sim.step(emptyControls()); failed = monitor.check(sim); }
+    expect(failed).toBe('crashed');
+    expect(sim.distance).toBeLessThan(chunk.obstacles[0].d);
+    sim.dispose();
+  });
   it('mounts certified obstacles flush on floors, ceilings and both walls, including the opening road', () => {
     const { halfWidth, height } = CONFIG.corridor;
     const mountedOn = (o: { x: number; y: number; half: { x: number; y: number } }): SurfaceType | null =>

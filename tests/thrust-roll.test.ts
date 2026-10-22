@@ -15,7 +15,7 @@ describe('thrusters', () => {
     expect(sim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - 0.5, 1);
   });
 
-  it('runs dry after ~5 s of continuous thrust and then stops pushing', async () => {
+  it('runs dry after a full tank of continuous thrust and then stops pushing', async () => {
     const sim = await makeSim([], { x: 0, y: 5, z: -10 });
     let emptyAt = -1;
     let lastVy = 0;
@@ -24,10 +24,11 @@ describe('thrusters', () => {
       if (emptyAt < 0 && sim.fuel.isEmpty) emptyAt = sim.time;
       lastVy = sim.vehicle.body.linvel().y;
     }
-    expect(emptyAt).toBeGreaterThan(4.9);
-    expect(emptyAt).toBeLessThan(5.1);
+    const tank = CONFIG.fuel.capacity / CONFIG.thrusters.liftFuelRate;
+    expect(emptyAt).toBeGreaterThan(tank - 0.1);
+    expect(emptyAt).toBeLessThan(tank + 0.1);
     // After running dry only gravity acts: vertical speed decreases at exactly g.
-    expect(lastVy).toBeLessThan((CONFIG.thrusters.liftAccel - CONFIG.gravity) * 5 - CONFIG.gravity * 1.9);
+    expect(lastVy).toBeLessThan((CONFIG.thrusters.liftAccel - CONFIG.gravity) * tank - CONFIG.gravity * (7 - tank - 0.1));
     const vy0 = sim.vehicle.body.linvel().y;
     run(sim, 0.5, { thrust: true });
     expect(sim.vehicle.body.linvel().y).toBeCloseTo(vy0 - CONFIG.gravity * 0.5, 0);

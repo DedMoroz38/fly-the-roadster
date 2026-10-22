@@ -82,12 +82,13 @@ describe('suction thermal hysteresis', () => {
 });
 
 describe('suction energy and viability', () => {
-  it('charges much more heat and fuel on the floor than on a wall', async () => {
+  it('heats at the floor rate on a wall but charges more fuel on the floor', async () => {
     const floorSim = await attached('floor');
     const wallSim = await attached('left');
     hold(floorSim, 2);
     hold(wallSim, 2);
-    expect(floorSim.vehicle.suctionHeat).toBeGreaterThan(wallSim.vehicle.suctionHeat * 10);
+    expect(S.heatRate).toBe(S.floorHeatRate);
+    expect(wallSim.vehicle.suctionHeat).toBeCloseTo(floorSim.vehicle.suctionHeat, 5);
     expect(CONFIG.fuel.capacity - floorSim.fuel.value).toBeGreaterThan((CONFIG.fuel.capacity - wallSim.fuel.value) * 3);
     expect(floorSim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - S.floorFuelRate * (floorSim.time - 1 / 60), 4);
     expect(wallSim.fuel.value).toBeCloseTo(CONFIG.fuel.capacity - S.fuelRate * (wallSim.time - 1 / 60), 4);
@@ -104,16 +105,18 @@ describe('suction energy and viability', () => {
   });
 
   for (const surface of ['left', 'ceiling'] as const) {
-    it(`${surface} traversal remains powered and attached for 25 seconds`, async () => {
+    it(`${surface} traversal stays attached until suction overheats at the floor rate`, async () => {
       const sim = await attached(surface);
-      hold(sim, 25);
+      const limit = S.criticalHeat / S.heatRate;
+      hold(sim, limit - 0.25);
       expect(sim.vehicle.mode).toBe('attached');
       expect(sim.vehicle.supportSurface).toBe(surface);
       expect(sim.vehicle.suctionOn).toBe(true);
-      expect(sim.vehicle.suctionHeat).toBeLessThan(40);
       expect(sim.vehicle.suctionOverheated).toBe(false);
-      expect(sim.fuel.value).toBeGreaterThan(3.9);
-      expect(sim.distance).toBeGreaterThan(500);
+      expect(sim.fuel.value).toBeGreaterThan(CONFIG.fuel.capacity - 0.5);
+      hold(sim, 0.5);
+      expect(sim.vehicle.suctionOverheated).toBe(true);
+      expect(sim.vehicle.mode).toBe('airborne');
     });
   }
 
