@@ -10,6 +10,7 @@ export type Action =
   | 'restart'
   | 'pause'
   | 'help'
+  | 'menu'
   | 'debug';
 
 export const KEY_BINDINGS: Record<string, Action> = {
@@ -25,6 +26,7 @@ export const KEY_BINDINGS: Record<string, Action> = {
   KeyR: 'restart',
   Escape: 'pause',
   KeyH: 'help',
+  KeyM: 'menu',
   F3: 'debug',
 };
 
@@ -36,7 +38,7 @@ export interface ControlState {
   rollRight: boolean;
   steerLeft: boolean;
   steerRight: boolean;
-  /** Held E: active on every snapshot until key release or input clear. */
+  /** Held Shift: active on every snapshot until key release or input clear. */
   suction: boolean;
 }
 

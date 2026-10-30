@@ -114,7 +114,9 @@ describe('constructive route contracts', () => {
     const second = planChunk({ id: 8, seed: 1008, kind: 'wall-right', difficulty: 1, d0: first.d1, entry: first.exit });
     expect(second.validation.reasons).toEqual([]);
     const sim = new Simulation({ createLevel: world => {
-      const level = new StaticLevel(world, [...first.slabs, ...second.slabs], [...first.pickups, ...second.pickups]);
+      // The trailing floor stands in for the next chunk, which a real course always has.
+      const level = new StaticLevel(world, [...first.slabs, ...second.slabs, { surface: 'floor', d0: second.d1, d1: second.d1 + 60 }], [...first.pickups, ...second.pickups],
+        [...first.obstacles, ...second.obstacles.map(o => ({ ...o, id: o.id + 1000 }))]);
       level.paceAt = distance => distance < first.d1 ? first.pace : second.pace;
       return level;
     } });
@@ -126,9 +128,10 @@ describe('constructive route contracts', () => {
       }
       // Separately constructed validation worlds and continuous coalesced colliders
       // produce slightly different contact integration. Measured drift across kinds and
-      // seeds reaches ~0.95 m, so both boundaries must stay within two physics steps
-      // (~33 ms), well inside the certified ±150 ms action-timing margin.
-      const seamTolerance = 2 * first.pace.max / CONFIG.physicsHz;
+      // seeds reaches ~0.95 m, and ~1.8 m after a ceiling-bar drop and re-catch (0.3 m at
+      // the seam, grown by the next attach and landing). Both boundaries must stay within
+      // four physics steps (~67 ms), well inside the certified ±150 ms action-timing margin.
+      const seamTolerance = 4 * first.pace.max / CONFIG.physicsHz;
       expect(Math.abs(sim.distance - first.d1 - second.entry.distanceOffset)).toBeLessThan(seamTolerance);
       expect(sim.vehicle.body.linvel().x).toBeCloseTo(second.entry.vx, 3);
       // The next floor collider already exists here, so contact solving at the

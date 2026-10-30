@@ -1,21 +1,34 @@
 import * as THREE from 'three';
 import type { Level } from '../game/physics/level';
+import type { PickupStyle } from './trackStyle';
+
+/** The original look: a lime octahedron inside a spinning glowing ring. */
+export function neonPickups(): PickupStyle {
+  const ringGeo = new THREE.TorusGeometry(1.25, 0.07, 8, 32);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xe9ff9a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+  const core = new THREE.OctahedronGeometry(0.95, 0);
+  const coreMaterial = new THREE.MeshStandardMaterial({ color: 0xb6ff3b, emissive: 0x8cff00, emissiveIntensity: 1.8, metalness: 0.2, roughness: 0.3 });
+  return {
+    core, coreMaterial, ring: () => new THREE.Mesh(ringGeo, ringMat), light: 0xb6ff3b, beam: 0xb6ff3b, burst: 0xd9ff7a,
+    dispose: () => { ringGeo.dispose(); ringMat.dispose(); core.dispose(); coreMaterial.dispose(); },
+  };
+}
 
 /** Glowing, spinning fuel cells kept in sync with the level's active pickups. */
 export class PickupView {
   readonly group = new THREE.Group();
   private items = new Map<number, THREE.Group>();
-  private coreGeo = new THREE.OctahedronGeometry(0.95, 0);
-  private ringGeo = new THREE.TorusGeometry(1.25, 0.07, 8, 32);
-  private coreMat = new THREE.MeshStandardMaterial({ color: 0xb6ff3b, emissive: 0x8cff00, emissiveIntensity: 1.8, metalness: 0.2, roughness: 0.3 });
-  private ringMat = new THREE.MeshBasicMaterial({ color: 0xe9ff9a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
   private beamGeo = new THREE.CylinderGeometry(0.3, 0.3, 1, 16, 1, true);
-  private beamMat = new THREE.MeshBasicMaterial({ color: 0xb6ff3b, transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false });
+  private beamMat: THREE.MeshBasicMaterial;
   private burstGeo = new THREE.TorusGeometry(1, 0.08, 8, 40);
   private bursts: { mesh: THREE.Mesh; age: number }[] = [];
   private known = new Map<number, { x: number; y: number; d: number; surface: string }>();
   private time = 0;
   private originDistance = 0;
+
+  constructor(private readonly style: PickupStyle = neonPickups()) {
+    this.beamMat = new THREE.MeshBasicMaterial({ color: style.beam, transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false });
+  }
 
   sync(level: Level, carDistance?: number, originDistance = 0) {
     if (originDistance !== this.originDistance) {
@@ -38,10 +51,9 @@ export class PickupView {
     for (const p of active.values()) {
       if (this.items.has(p.id)) continue;
       const g = new THREE.Group();
-      g.add(new THREE.Mesh(this.coreGeo, this.coreMat));
-      const ring = new THREE.Mesh(this.ringGeo, this.ringMat);
-      g.add(ring);
-      const light = new THREE.PointLight(0xb6ff3b, 14, 14, 1.5);
+      g.add(new THREE.Mesh(this.style.core, this.style.coreMaterial));
+      g.add(this.style.ring());
+      const light = new THREE.PointLight(this.style.light, 14, 14, 1.5);
       g.add(light);
       // A tall translucent beam across the corridor makes the cell visible from far away.
       const beam = new THREE.Mesh(this.beamGeo, this.beamMat);
@@ -64,7 +76,7 @@ export class PickupView {
   }
 
   private burst(at: THREE.Vector3) {
-    const mat = new THREE.MeshBasicMaterial({ color: 0xd9ff7a, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
+    const mat = new THREE.MeshBasicMaterial({ color: this.style.burst, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
     const mesh = new THREE.Mesh(this.burstGeo, mat);
     mesh.position.copy(at);
     this.group.add(mesh);
@@ -108,12 +120,9 @@ export class PickupView {
 
   dispose() {
     this.clear();
-    this.coreGeo.dispose();
-    this.ringGeo.dispose();
+    this.style.dispose();
     this.beamGeo.dispose();
     this.burstGeo.dispose();
-    this.coreMat.dispose();
-    this.ringMat.dispose();
     this.beamMat.dispose();
   }
 }

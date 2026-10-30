@@ -246,9 +246,12 @@ export class CarModel {
     const scale = Math.min((he.z * 2) / size.z, FIT_LIMITS.height / size.y, FIT_LIMITS.width / size.x);
     root.scale.setScalar(scale);
     root.position.set(-centre.x * scale, -he.y - box.min.y * scale, -centre.z * scale);
-    // Keep the underglow tucked under narrow bodies (a dino, a boat) instead of beside them.
+    // Underglow belongs under car-width bodies; on narrow ones (a dino, a boat) it would show as stray lines.
     const halfWidth = (size.x * scale) / 2;
-    for (const strip of this.underglow) strip.position.x = Math.sign(strip.position.x) * Math.max(0.1, Math.min(he.x - 0.25, halfWidth * 0.6));
+    for (const strip of this.underglow) {
+      strip.visible = halfWidth > 0.7;
+      strip.position.x = Math.sign(strip.position.x) * Math.min(he.x - 0.25, halfWidth * 0.6);
+    }
     body.traverse(o => {
       if (/wheel/i.test(o.name)) this.wheels.push(o);
       if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;

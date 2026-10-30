@@ -3,6 +3,7 @@ import { SlabSet } from '../game/physics/level';
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
 import { slabParts, SurfaceType } from '../game/surfaces';
 import { CONFIG } from '../game/config';
+import type { GridOrigin, SurfaceStyle } from './trackStyle';
 
 export const SURFACE_COLORS: Record<SurfaceType, { base: number; line: number }> = {
   floor: { base: 0x26324a, line: 0x2fd4ff },
@@ -43,12 +44,20 @@ function gridMaterial(surface: SurfaceType, gridOrigin: { value: number }): THRE
   return mat;
 }
 
+/** The original look: dark panels with a world-space neon grid and colour-coded glowing trims. */
+export const NEON_SURFACES: SurfaceStyle = {
+  surface: (surface: SurfaceType, origin: GridOrigin) => gridMaterial(surface, origin),
+  edge: (surface: SurfaceType) => new THREE.MeshBasicMaterial({ color: SURFACE_COLORS[surface].line }),
+  trim: 0.08,
+  bar: 0.12,
+};
+
 /** Keeps one mesh per active slab in sync with the physics slab set. */
 export class SurfaceView {
   readonly group = new THREE.Group();
   private meshes = new Map<number, THREE.Object3D>();
-  private materials: Record<SurfaceType, THREE.MeshStandardMaterial>;
-  private edgeMaterials: Record<SurfaceType, THREE.MeshBasicMaterial>;
+  private materials: Record<SurfaceType, THREE.Material>;
+  private edgeMaterials: Record<SurfaceType, THREE.Material>;
   private boxGeo = new THREE.BoxGeometry(1, 1, 1);
   private edgeGeo = new THREE.BoxGeometry(1, 1, 1);
   private syncedVersion = -1;
@@ -56,15 +65,10 @@ export class SurfaceView {
   private originDistance = 0;
   private gridOrigin = { value: 0 };
 
-  constructor() {
-    this.materials = {
-      floor: gridMaterial('floor', this.gridOrigin),
-      ceiling: gridMaterial('ceiling', this.gridOrigin),
-      left: gridMaterial('left', this.gridOrigin),
-      right: gridMaterial('right', this.gridOrigin),
-    };
-    const edge = (s: SurfaceType) => new THREE.MeshBasicMaterial({ color: SURFACE_COLORS[s].line });
-    this.edgeMaterials = { floor: edge('floor'), ceiling: edge('ceiling'), left: edge('left'), right: edge('right') };
+  constructor(private readonly style: SurfaceStyle = NEON_SURFACES) {
+    const each = <T>(make: (s: SurfaceType) => T) => ({ floor: make('floor'), ceiling: make('ceiling'), left: make('left'), right: make('right') });
+    this.materials = each(s => style.surface(s, this.gridOrigin));
+    this.edgeMaterials = each(s => style.edge(s, this.gridOrigin));
   }
 
   sync(slabs: SlabSet, originDistance = 0) {
@@ -112,7 +116,7 @@ export class SurfaceView {
       for (const end of [-1, 1]) {
         if (end === 1 && slab.bevel === false) continue; // +1 is the start (z = -d0); continuation seam: no marker
         const bar = new THREE.Mesh(this.edgeGeo, this.edgeMaterials[slab.surface]);
-        bar.scale.set(ends.half.x * 2 + 0.04, ends.half.y * 2 + 0.04, 0.12);
+        bar.scale.set(ends.half.x * 2 + 0.04, ends.half.y * 2 + 0.04, this.style.bar);
         bar.position.set(ends.center.x, ends.center.y, ends.center.z + end * (ends.half.z - 0.05));
         holder.add(bar);
       }
@@ -128,7 +132,7 @@ export class SurfaceView {
         : [[W - 0.02, 0], [W - 0.02, H]];
       for (const [x, y] of trims) {
         const trim = new THREE.Mesh(this.edgeGeo, this.edgeMaterials[slab.surface]);
-        trim.scale.set(0.08, 0.08, len);
+        trim.scale.set(this.style.trim, this.style.trim, len);
         trim.position.set(x, y, zc);
         holder.add(trim);
       }

@@ -1,7 +1,7 @@
 import { FixedStepper } from '../core/fixedStep';
 import { InputManager } from './input';
 import { Simulation, initPhysics } from './simulation';
-import { getSelectedVehicle, loadVehicle, setSelectedVehicle, VEHICLES, vehicleById } from '../render/vehicles';
+import { getSelectedVehicle, loadVehicle, setSelectedVehicle, VEHICLES, vehicleById, vehicleWorld } from '../render/vehicles';
 import { Course } from './course/course';
 import { WorkerChunkSource } from './course/workerSource';
 import { SCENARIOS } from './course/routeGenerator';
@@ -49,7 +49,7 @@ export class Game {
     try { await Promise.all([initialSource.ready, loadVehicle(this.vehicleId).catch(() => undefined)]); }
     catch (error) { initialSource.dispose(); if (!this.disposed) throw error; return; }
     if (this.disposed) { initialSource.dispose(); return; }
-    this.renderer = new GameRenderer(this.host);
+    this.renderer = new GameRenderer(this.host, vehicleWorld(this.vehicleId), this.seed);
     let first = true;
     this.session = new GameSession(this.seed, (seed) => new Simulation({ createLevel: (w) => {
       const source = first ? initialSource : initialSource.restartSource();
@@ -84,6 +84,7 @@ export class Game {
     this.vehicleId = vehicleById(id).id;
     setSelectedVehicle(this.vehicleId);
     this.renderer?.car.setVehicle(this.vehicleId);
+    this.renderer?.setWorld(vehicleWorld(this.vehicleId), this.seed);
     this.emit(true);
   }
 
@@ -104,6 +105,15 @@ export class Game {
 
   restart() {
     this.session.restart();
+    this.stepper.reset();
+    this.emit(true);
+  }
+
+  /** From the pause or game-over screen back to the main menu, where the vehicle can be changed. */
+  returnToMenu() {
+    if (this.session.state !== 'paused' && this.session.state !== 'gameover') return;
+    this.session.returnToMenu();
+    this.input.clearUntilRelease();
     this.stepper.reset();
     this.emit(true);
   }
@@ -142,8 +152,9 @@ export class Game {
       if (this.input.consumePress('rollLeft')) this.cycleVehicle(-1);
       if (this.input.consumePress('rollRight')) this.cycleVehicle(1);
       // No shortcut can bypass the menu or queue a later action.
-      for (const action of ['restart', 'pause', 'help', 'debug'] as const) this.input.consumePress(action);
+      for (const action of ['restart', 'pause', 'help', 'menu', 'debug'] as const) this.input.consumePress(action);
     } else {
+      if (this.input.consumePress('menu')) this.returnToMenu();
       if (this.input.consumePress('restart')) this.restart();
       if (this.input.consumePress('pause')) {
         if (s.helpOpen) this.toggleHelp();

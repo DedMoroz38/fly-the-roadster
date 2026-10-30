@@ -61,6 +61,8 @@ export class Vehicle {
   attachCount = 0;
   /** Surface currently attached to / driven on, if any. */
   supportSurface: SurfaceType | null = null;
+  /** Seconds left in which suction reaches further back to a ceiling just let go of (CONFIG.suction.recatchRange). */
+  recatch = 0;
   private surfaceQueriesDirty = false;
 
   constructor(
@@ -151,7 +153,10 @@ export class Vehicle {
     // Re-evaluate the held request every step: release always detaches immediately,
     // and holding E can resume after thermal recovery or a fuel pickup.
     this.suctionOn = c.suction && !fuel.isEmpty;
-    this.probe = this.probeSurface(CONFIG.suction.range);
+    const reach = this.recatch > 0 ? CONFIG.suction.recatchRange : CONFIG.suction.range;
+    this.probe = this.probeSurface(reach);
+    // The longer reach only finds the ceiling the car just left.
+    if (this.probe && this.probe.gap > CONFIG.suction.range && this.probe.surface !== 'ceiling') this.probe = null;
     const aligned = !!this.probe && this.probe.alignment >= Math.cos((CONFIG.suction.maxAlignAngleDeg * Math.PI) / 180);
     const touching = aligned && this.probe!.gap <= car.groundProbe;
     const floorContact = touching && this.probe!.surface === 'floor';
@@ -168,8 +173,10 @@ export class Vehicle {
     const power = fuel.consume(dt, energyRate);
     this.liftThrust = c.thrust ? power : 0;
     if (fuel.isEmpty) this.suctionOn = false;
-    const suction = evaluateSuction(this.suctionOn, this.probe);
-    const wasAttached = this.mode === 'attached';
+    const suction = evaluateSuction(this.suctionOn, this.probe, this.recatch > 0
+      ? { ...CONFIG.suction, range: reach, attractAccel: CONFIG.suction.recatchAccel, maxAttractAccel: CONFIG.suction.recatchAccel }
+      : CONFIG.suction);
+    const wasAttached = this.mode === 'attached', previousSurface = this.supportSurface;
     if (suction.state === 'attached') this.mode = 'attached';
     else if (touching && this.probe!.surface === 'floor') this.mode = 'grounded';
     else this.mode = 'airborne';
@@ -177,6 +184,9 @@ export class Vehicle {
     this.justAttached = this.mode === 'attached' && !wasAttached;
     if (this.justAttached) this.attachCount++;
     this.supportSurface = this.mode === 'airborne' ? null : this.probe!.surface;
+    if (this.mode !== 'airborne') this.recatch = 0;
+    else if (wasAttached && previousSurface === 'ceiling') this.recatch = CONFIG.suction.recatchSeconds;
+    else this.recatch = Math.max(0, this.recatch - dt);
 
     const v = this.body.linvel();
     const { up } = carAxes(this.roll);

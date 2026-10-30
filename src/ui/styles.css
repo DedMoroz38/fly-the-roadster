@@ -55,6 +55,9 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
 .cta { color: var(--cyan); font-weight: 600; letter-spacing: 0.08em; margin: 6px 0 0; }
 .gameover h2 { color: var(--red); }
 .final .value { font-size: 48px; font-weight: 700; }
+.panel-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.panel-actions button { pointer-events: auto; padding: 8px 16px; border-radius: 8px; border: 1px solid rgba(47, 212, 255, 0.45); background: rgba(47, 212, 255, 0.08); color: inherit; font: inherit; font-size: 13px; letter-spacing: 0.06em; cursor: pointer; }
+.panel-actions button:hover, .panel-actions button:focus-visible { background: rgba(47, 212, 255, 0.22); outline: none; }
 
 .heat { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .heat .bar { width: 130px; height: 12px; border-radius: 6px; background: #ffffff18; overflow: hidden; border: 1px solid #ffffff26; }

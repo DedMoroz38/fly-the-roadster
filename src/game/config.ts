@@ -59,6 +59,11 @@ export const CONFIG = {
     stabilizeDamping: 6,
     maxApproachSpeed: 14, // cap on velocity toward the surface (no snapping)
     attractGravityScale: 0.35, // the suction beam partly carries the car while pulling it in
+    // Letting go of a ceiling: the car drops as usual, but for a moment the suction reaches further
+    // back to that ceiling and pulls harder, so holding Shift again recovers from a deeper drop.
+    recatchSeconds: 1.5,
+    recatchRange: 8,
+    recatchAccel: 100,
     criticalHeat: 100,
     recoveryHeat: 35,
     warningHeat: 75,

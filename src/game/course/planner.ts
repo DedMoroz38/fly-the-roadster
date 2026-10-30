@@ -27,7 +27,7 @@ export interface RouteWaypoint {
   surface: SurfaceType | null; phase: string;
 }
 export interface ManeuverPhase {
-  action: 'drive' | 'launch' | 'roll' | 'catch' | 'flight';
+  action: 'drive' | 'launch' | 'roll' | 'catch' | 'flight' | 'hop';
   label: string;
   surface?: SurfaceType;
   untilD?: number;
@@ -36,6 +36,8 @@ export interface ManeuverPhase {
   roll?: number;
   suction?: boolean;
   pulses?: [number, number][];
+  /** hop: chunk-relative centre of the ceiling bar to drop under. */
+  bar?: number;
 }
 export interface PlanValidation {
   accepted: boolean;
@@ -203,7 +205,6 @@ function blueprint(kind: ScenarioKind, seed: number, difficulty: number, entry: 
     support('floor', 0, end);
   } else if (kind === 'ceiling' || kind === 'multiple') {
     const lead = leadAfter(m(P.ceilingLaunchLead));
-    const ceilingEnd = lead + traversal;
     // Mirrored per seed, so the ceiling hands over to either wall.
     const side: SurfaceType = rng.chance(0.5) ? 'left' : 'right';
     const sign = side === 'left' ? -1 : 1;
@@ -212,10 +213,22 @@ function blueprint(kind: ScenarioKind, seed: number, difficulty: number, entry: 
     roll(Math.PI);
     catchSurface('ceiling');
     required.push('ceiling');
+    // A multiple drops toward its wall's side, then a floor leg cools suction before the wall.
+    const ceilingX = kind === 'multiple' ? sign * setupX : 0;
+    // Sometimes a hanging bar, shortly after attaching; the run continues past it before the drop.
+    const barLead = CONFIG.car.halfExtents.z + P.ceilingBarHalfLength + pace.max * (P.ceilingBarRelease + P.timingTolerance + 0.1);
+    const bar = lead + m(P.ceilingAttachLead + P.reactionMargin) + pace.max * P.ceilingBarNotice + barLead;
+    let ceilingEnd = lead + traversal;
+    if (new Rng(seed ^ 0xba5).chance(P.ceilingBarChance.min + (P.ceilingBarChance.max - P.ceilingBarChance.min) * difficulty)) {
+      drive(bar - barLead, 'ceiling', ceilingX);
+      phases.push({ action: 'hop', label: 'release suction under bar', bar, x: ceilingX, y: CONFIG.corridor.height, suction: true });
+      obstacles.push({ id: obstacles.length + 1, x: 0, y: CONFIG.corridor.height - P.ceilingBarHeight / 2, d: bar,
+        half: { x: CONFIG.corridor.halfWidth, y: P.ceilingBarHeight / 2, z: P.ceilingBarHalfLength } });
+      ceilingEnd = Math.max(ceilingEnd, bar + pace.max * P.ceilingBarSettleSeconds);
+    }
     support('floor', 0, lead);
     support('ceiling', lead - m(P.supportOverlap), ceilingEnd + m(40));
-    // A multiple drops toward its wall's side, then a floor leg cools suction before the wall.
-    drive(ceilingEnd, 'ceiling', kind === 'multiple' ? sign * setupX : 0);
+    drive(ceilingEnd, 'ceiling', ceilingX);
     roll(0);
     catchSurface('floor');
     if (kind === 'ceiling') {
@@ -289,8 +302,14 @@ function orientation(sim: Simulation, angle: number, c: ControlState) {
     c.rollRight = error < 0;
   }
 }
+/** Seconds until the car's nose reaches the near face of a hop's bar; negative once past it. */
+function secondsToBar(sim: Simulation, phase: ManeuverPhase): number {
+  const nose = sim.distance + CONFIG.car.halfExtents.z;
+  return (phase.bar! - P.ceilingBarHalfLength - nose) / Math.max(1, sim.vehicle.forwardSpeed);
+}
 function phaseDone(sim: Simulation, phase: ManeuverPhase, elapsed: number): boolean {
   switch (phase.action) {
+    case 'hop': return secondsToBar(sim, phase) < -P.ceilingBarResume && sim.vehicle.mode === 'attached' && sim.vehicle.supportSurface === 'ceiling';
     case 'drive': return sim.distance >= phase.untilD!;
     case 'launch': case 'flight': return elapsed >= phase.duration!;
     case 'roll': return Math.abs(wrapAngle(phase.roll! - sim.vehicle.roll)) < 0.32;
@@ -301,6 +320,12 @@ function phaseControls(sim: Simulation, phase: ManeuverPhase, elapsed: number): 
   const c = emptyControls();
   c.suction = !!phase.suction;
   if (phase.action === 'drive') steer(sim, phase, c);
+  if (phase.action === 'hop') {
+    // Timed in seconds from the bar, so every entry speed drops to the same depth under it.
+    const t = secondsToBar(sim, phase);
+    c.suction = t > P.ceilingBarRelease || t < -P.ceilingBarResume;
+    steer(sim, phase, c);
+  }
   if (phase.action === 'launch') c.thrust = true;
   if (phase.action === 'roll') orientation(sim, phase.roll!, c);
   if (phase.action === 'flight') c.thrust = phase.pulses!.some(([a, b]) => elapsed >= a && elapsed < b);
@@ -314,6 +339,7 @@ function replay(entry: ReachableState, b: Blueprint, tape?: ControlState[], timi
   const visited = new Set<SurfaceType>();
   let phase = 0, phaseStart = 0, minFuel = entry.fuel, maxHeat = entry.heat;
   let lastArrival = entry.lastArrival, wasAirborne = false, minReactionSeconds = Infinity;
+  let leftSurface: SurfaceType | null = entry.surface;
   const shift = Math.round(timingShift / sim.dt);
   const maxSteps = Math.ceil(P.maxValidationSeconds / sim.dt);
   let steps = 0;
@@ -339,16 +365,24 @@ function replay(entry: ReachableState, b: Blueprint, tape?: ControlState[], timi
         c.suction = false;
       }
       const newPhase = recordedPhases.length === 0 || recordedPhases[recordedPhases.length - 1] !== phase;
-      if (newPhase && (active.action === 'launch' || active.action === 'flight' ||
+      if (newPhase && (active.action === 'launch' || active.action === 'flight' || active.action === 'hop' ||
         (active.action === 'roll' && b.phases[Math.max(0, phase - 1)].action === 'drive'))) {
         const reaction = (sim.distance - lastArrival) / b.pace.max;
-        minReactionSeconds = Math.min(minReactionSeconds, reaction);
-        if (reaction < b.timing.reaction) { reasons.push('insufficient human reaction interval'); break; }
+        // A ceiling bar has its own shorter notice (it is in view during the climb); launches need the full interval.
+        if (active.action === 'hop') {
+          if (reaction < P.ceilingBarNotice) { reasons.push('insufficient notice before ceiling bar'); break; }
+        } else {
+          minReactionSeconds = Math.min(minReactionSeconds, reaction);
+          if (reaction < b.timing.reaction) { reasons.push('insufficient human reaction interval'); break; }
+        }
         if (sim.fuel.value < P.launchFuelReserve) { reasons.push('insufficient launch fuel reserve'); break; }
       }
       controls.push(c); recordedPhases.push(phase);
+      const supportBefore = sim.vehicle.supportSurface;
       sim.step(c);
-      if (wasAirborne && sim.vehicle.mode !== 'airborne') lastArrival = sim.distance;
+      // Sinking under a ceiling bar never leaves the ceiling's run, so its re-catch is not a new arrival.
+      if (wasAirborne && sim.vehicle.mode !== 'airborne' && !(leftSurface === 'ceiling' && sim.vehicle.supportSurface === 'ceiling')) lastArrival = sim.distance;
+      if (!wasAirborne && sim.vehicle.mode === 'airborne') leftSurface = supportBefore;
       wasAirborne = sim.vehicle.mode === 'airborne';
       minFuel = Math.min(minFuel, sim.fuel.value); maxHeat = Math.max(maxHeat, sim.vehicle.suctionHeat);
       if (sim.vehicle.supportSurface) visited.add(sim.vehicle.supportSurface);

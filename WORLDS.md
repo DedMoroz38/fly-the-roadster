@@ -1,5 +1,7 @@
 # Worlds per vehicle
 
+> Status: Steve's voxel sky-island world is built (see README → Worlds). Other worlds are ideas.
+
 Idea: each vehicle gets its own world. The track, hazards and sky are restyled, and the course
 itself (layout, physics, validation) stays the same for everyone. Steve's world should look like a
 Minecraft-style sky world: floating voxel islands, waterfalls, lanterns, a portal-arch track and

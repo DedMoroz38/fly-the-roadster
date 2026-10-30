@@ -25,7 +25,10 @@ export const suctionAlignThreshold = () => Math.cos((CONFIG.suction.maxAlignAngl
  * along the wheels' direction and the wheels face it. Pull grows smoothly as the gap closes,
  * so the car is drawn in by forces (no teleport/snap).
  */
-export function evaluateSuction(active: boolean, probe: SuctionProbe | null, cfg = CONFIG.suction): SuctionResult {
+/** Suction tuning with its values widened, so a step can override reach and pull. */
+export type SuctionConfig = { readonly [K in keyof typeof CONFIG.suction]: number };
+
+export function evaluateSuction(active: boolean, probe: SuctionProbe | null, cfg: SuctionConfig = CONFIG.suction): SuctionResult {
   if (!active) return { state: 'off', pull: 0 };
   if (!probe || !probe.surface || !Number.isFinite(probe.gap) || !Number.isFinite(probe.alignment) || probe.gap > cfg.range) return { state: 'searching', pull: 0 };
   if (probe.alignment < Math.cos((cfg.maxAlignAngleDeg * Math.PI) / 180)) return { state: 'searching', pull: 0 };

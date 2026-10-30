@@ -30,6 +30,7 @@ const CONTROLS: [string, string][] = [
   ['Hold Shift', 'Engage suction · release to let go'],
   ['R', 'Restart'],
   ['Esc', 'Pause'],
+  ['M', 'Main menu (while paused or after a crash)'],
   ['H', 'Show / hide this help'],
   ['F3', 'Route and physics debug view'],
 ];
@@ -90,6 +91,7 @@ function HelpPanel() {
         <li>Release Shift on the floor to cool and avoid drag. Overheated suction stays off until heat drops below {Math.round(CONFIG.suction.recoveryHeat / CONFIG.suction.criticalHeat * 100)}%; holding Shift then engages it again.</li>
         <li>Cruising is automatic and uses no fuel. Release W / ↑ to ease back to cruise speed.</li>
         <li>Landing on the roof ends the run. Roll upright before returning to the road.</li>
+        <li>Bars hanging from a ceiling: release Shift just before one so the car drops under it, then hold Shift again right away to pull back up. Just after letting go, suction reaches further and pulls harder.</li>
         <li>You score a point per metre. Full rolls in one jump pay a bonus on a safe landing: 1 flip {flipPoints(1)}, 2 flips {flipPoints(2)}, 3 flips {flipPoints(3)}.</li>
       </ul>
       <p className="cta">Press H or Esc to resume</p>
@@ -181,7 +183,12 @@ export function Hud({ game }: { game: Game | null }) {
         <div className="overlay">
           <div className="panel">
             <h2>Paused</h2>
-            <p>Esc to resume · R to restart · H for help</p>
+            <p>Esc to resume · R to restart · M for main menu · H for help</p>
+            <div className="panel-actions">
+              <button type="button" onClick={() => game?.togglePause()}>Resume</button>
+              <button type="button" onClick={() => game?.restart()}>Restart</button>
+              <button type="button" onClick={() => game?.returnToMenu()}>Main menu</button>
+            </div>
           </div>
         </div>
       )}
@@ -191,7 +198,11 @@ export function Hud({ game }: { game: Game | null }) {
             <h2>{s.failReason ? FAIL_TEXT[s.failReason] : 'Game over'}</h2>
             <div className="final"><span className="value">{Math.floor(s.score)}</span> pts</div>
             <p>{Math.floor(s.distance)} m · Best: {Math.floor(s.best)} pts</p>
-            <p className="cta">Press R to try again</p>
+            <p className="cta">Press R to try again · M for main menu</p>
+            <div className="panel-actions">
+              <button type="button" onClick={() => game?.restart()}>Try again</button>
+              <button type="button" onClick={() => game?.returnToMenu()}>Main menu</button>
+            </div>
           </div>
         </div>
       )}

@@ -6,6 +6,13 @@ import { PickupView } from './pickupView';
 import { Simulation } from '../game/simulation';
 import { lerp } from '../core/math';
 import type { RouteWaypoint } from '../game/course/planner';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import type { Environment } from './environment';
+import { WORLDS, type WorldId } from './worlds';
+import { neonObstacles, obstacleKind, type ObstacleKind, type ObstacleStyle } from './trackStyle';
 
 interface RouteSource { version: number; readonly routeWaypoints: readonly RouteWaypoint[] }
 interface ObstacleSource {
@@ -75,11 +82,19 @@ export class ObstacleView {
   private meshes = new Map<number, THREE.Group>();
   private box = new THREE.BoxGeometry(1, 1, 1);
   private edges = new THREE.EdgesGeometry(this.box);
-  private material = new THREE.MeshStandardMaterial({ color: 0x5b2438, emissive: 0x9d173e, emissiveIntensity: 0.45, metalness: 0.35, roughness: 0.55 });
-  private edgeMaterial = new THREE.LineBasicMaterial({ color: 0xff677b, toneMapped: false });
+  private materials = new Map<ObstacleKind, THREE.Material>();
   private source: ObstacleSource | null = null;
   private syncedVersion = -1;
   private originDistance = 0;
+  private gridOrigin = { value: 0 };
+
+  constructor(private readonly style: ObstacleStyle = neonObstacles()) {}
+
+  private material(kind: ObstacleKind) {
+    let material = this.materials.get(kind);
+    if (!material) { material = this.style.material(kind, this.gridOrigin); this.materials.set(kind, material); }
+    return material;
+  }
 
   sync(source: ObstacleSource | undefined, originDistance = 0) {
     if (!source) { if (this.source) this.clear(); return; }
@@ -87,6 +102,7 @@ export class ObstacleView {
     if (source.version === this.syncedVersion && originDistance === this.originDistance) return;
     this.syncedVersion = source.version;
     this.originDistance = originDistance;
+    this.gridOrigin.value = originDistance % 4;
     for (const [id, mesh] of this.meshes) {
       if (!source.active.has(id)) { this.group.remove(mesh); this.meshes.delete(id); }
     }
@@ -95,8 +111,10 @@ export class ObstacleView {
       if (!mesh) {
         mesh = new THREE.Group();
         mesh.name = `obstacle-${obstacle.id}`;
-        mesh.add(new THREE.Mesh(this.box, this.material));
-        mesh.add(new THREE.LineSegments(this.edges, this.edgeMaterial));
+        const kind = obstacleKind(obstacle);
+        mesh.add(new THREE.Mesh(this.box, this.material(kind)));
+        const edges = this.style.edges(kind);
+        if (edges) mesh.add(new THREE.LineSegments(this.edges, edges));
         this.meshes.set(obstacle.id, mesh);
         this.group.add(mesh);
       }
@@ -115,7 +133,11 @@ export class ObstacleView {
 
   dispose() {
     this.clear();
-    this.box.dispose(); this.edges.dispose(); this.material.dispose(); this.edgeMaterial.dispose();
+    this.box.dispose(); this.edges.dispose();
+    const materials = new Set<THREE.Material>(this.materials.values());
+    for (const kind of ['block', 'gate', 'barrier'] as const) { const edges = this.style.edges(kind); if (edges) materials.add(edges); }
+    for (const material of materials) material.dispose();
+    this.materials.clear();
   }
 }
 
@@ -125,18 +147,21 @@ export class GameRenderer {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
   readonly car = new CarModel();
-  readonly surfaces = new SurfaceView();
-  readonly pickups = new PickupView();
+  surfaces!: SurfaceView;
+  pickups!: PickupView;
   readonly route = new CourseRouteView();
-  readonly obstacles = new ObstacleView();
+  obstacles!: ObstacleView;
   debugEnabled = false;
   readonly rig: CameraRig;
+  worldId: WorldId | null = null;
+  private worldSeed = 0;
+  private environment: Environment | null = null;
+  private composer: EffectComposer | null = null;
   private carLight: THREE.PointLight;
-  private stars: THREE.Points;
   private seenAttachCount = 0;
   private originDistance = 0;
 
-  constructor(private host: HTMLElement) {
+  constructor(private host: HTMLElement, world: WorldId = 'neon', seed = 0) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -146,34 +171,58 @@ export class GameRenderer {
     this.camera = new THREE.PerspectiveCamera(70, 1, 0.1, 700);
     this.rig = new CameraRig(this.camera);
 
-    this.scene.background = new THREE.Color(0x060818);
-    this.scene.fog = new THREE.Fog(0x060818, 70, 400);
-    this.scene.add(new THREE.HemisphereLight(0xa8ccff, 0x3a2a60, 1.25));
-    this.stars = makeStars();
-    this.scene.add(this.stars);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-    sun.position.set(4, 12, 6);
-    this.scene.add(sun);
-    this.scene.add(sun.target);
-    // Soft fill from below so the car and ceilings read well when seen from underneath.
-    const under = new THREE.DirectionalLight(0x9c88ff, 0.9);
-    under.position.set(-3, -10, 4);
-    this.scene.add(under);
     this.carLight = new THREE.PointLight(0x66e0ff, 30, 18, 1.6);
     this.scene.add(this.carLight);
-
-    this.scene.add(this.surfaces.group);
-    this.scene.add(this.pickups.group);
     this.scene.add(this.car.group);
     this.scene.add(this.route.group);
-    this.scene.add(this.obstacles.group);
+    this.setWorld(world, seed);
+  }
+
+  /**
+   * Restyles the track and swaps the surroundings. Track views are rebuilt empty and refill from
+   * the simulation's active geometry on the next frame; the course itself is unchanged.
+   */
+  setWorld(id: WorldId, seed = this.worldSeed) {
+    if (id === this.worldId && seed === this.worldSeed) return;
+    const world = WORLDS[id];
+    for (const view of [this.surfaces, this.pickups, this.obstacles]) {
+      if (!view) continue;
+      this.scene.remove(view.group);
+      view.dispose();
+    }
+    if (this.environment) { this.scene.remove(this.environment.group); this.environment.dispose(); }
+    this.surfaces = new SurfaceView(world.surfaces);
+    this.pickups = new PickupView(world.pickups());
+    this.obstacles = new ObstacleView(world.obstacles());
+    this.environment = world.environment(seed);
+    this.scene.add(this.environment.group, this.surfaces.group, this.pickups.group, this.obstacles.group);
+    this.carLight.intensity = this.environment.carLight;
+    this.scene.background = this.environment.background;
+    this.scene.fog = this.environment.fog;
+    this.camera.far = this.environment.cameraFar;
+    this.composer?.dispose();
+    this.composer = null;
+    const bloom = this.environment.bloom;
+    if (bloom) {
+      // Light sources (lanterns, portals, the sun) are brighter than white, so only they bloom.
+      this.composer = new EffectComposer(this.renderer);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), bloom.strength, bloom.radius, bloom.threshold));
+      this.composer.addPass(new OutputPass());
+    }
+    this.worldId = id;
+    this.worldSeed = seed;
     this.resize();
+    // Build the opening scenery and compile shaders now (on the menu), not on the first frame of a run.
+    this.environment.update(this.camera, this.originDistance - this.camera.position.z, 0);
+    this.renderer.compile(this.scene, this.camera);
   }
 
   resize() {
     const w = this.host.clientWidth || window.innerWidth;
     const h = this.host.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h);
+    this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -230,10 +279,12 @@ export class GameRenderer {
       this.camera.fov += (fov - this.camera.fov) * Math.min(1, frameDt * 4);
       this.camera.updateProjectionMatrix();
     }
-    this.stars.position.z = pos.z;
     this.carLight.position.set(pos.x, pos.y + 1.5, pos.z - 2);
     this.rig.update(pos, frameDt);
-    this.renderer.render(this.scene, this.camera);
+    // The camera's logical distance drives scenery that scrolls slower than the track.
+    this.environment?.update(this.camera, origin - this.camera.position.z, frameDt);
+    if (this.composer) this.composer.render(frameDt);
+    else this.renderer.render(this.scene, this.camera);
   }
 
   dispose() {
@@ -241,6 +292,8 @@ export class GameRenderer {
     this.obstacles.dispose();
     this.surfaces.dispose();
     this.pickups.dispose();
+    this.environment?.dispose();
+    this.composer?.dispose();
     // Car parts share several geometries/materials. Dispose each remaining
     // scene resource once after views release their own cached assets.
     const geometries = new Set<THREE.BufferGeometry>();
@@ -258,23 +311,4 @@ export class GameRenderer {
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
-}
-
-/** Distant star shell around the corridor for depth and motion reference. */
-function makeStars(): THREE.Points {
-  const n = 1500;
-  const pos = new Float32Array(n * 3);
-  let seed = 12345;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < n; i++) {
-    const a = rnd() * Math.PI * 2;
-    const r = 120 + rnd() * 200;
-    pos[i * 3] = Math.cos(a) * r;
-    pos[i * 3 + 1] = 5 + Math.sin(a) * r;
-    pos[i * 3 + 2] = -rnd() * 600 + 100;
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const mat = new THREE.PointsMaterial({ color: 0x9fb8ff, size: 1.2, sizeAttenuation: true, fog: false, transparent: true, opacity: 0.8 });
-  return new THREE.Points(geo, mat);
 }

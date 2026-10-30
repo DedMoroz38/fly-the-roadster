@@ -68,4 +68,26 @@ export const PLANNER_CONFIG = {
   hurdleLiftSeconds: 0.4,
   hurdleSpacing: 125,
   hurdleLanding: 50,
+  /**
+   * A full-width bar hanging from a ceiling run, passed by cutting suction so the car drops under it,
+   * then holding Shift again to pull back up (CONFIG.suction.recatchRange / recatchAccel). Chance per
+   * ceiling run at difficulty 0 and 1. One per run: suction heat leaves no room for a second.
+   */
+  ceilingBarChance: { min: 0.3, max: 1 },
+  /** Thinner bars let the contact solver push the car beneath them instead of stopping it. */
+  ceilingBarHeight: 0.6,
+  ceilingBarHalfLength: 0.5,
+  /** Seconds before the car's nose reaches a bar that suction is cut; dropping below it takes ~0.3 s. */
+  ceilingBarRelease: 0.5,
+  /** Seconds after the nose reaches the bar that suction is held again; any moment from -0.15 to 0.35 s works. */
+  ceilingBarResume: 0.05,
+  /**
+   * Seconds on the ceiling before the first bar's release begins. Shorter than the reaction interval:
+   * the bar is in view during the climb, and a full interval would overheat suction before the bar.
+   */
+  ceilingBarNotice: 1,
+  /** Ceiling run after the bar before the drop to the floor; enough to pull back up and attach. */
+  ceilingBarSettleSeconds: 0.8,
+  /** Where the car attaches to the ceiling, past the planned lead, at base top speed (conservative). */
+  ceilingAttachLead: 10,
 } as const;

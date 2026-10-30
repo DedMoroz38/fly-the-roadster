@@ -373,6 +373,91 @@ Full run: **227 tests / 26 suites pass**; `npm run build` passes and bundles six
 in total, each loaded on first selection). Browser: arrow keys cycle through all six with matching
 names and credits, and each was checked in game.
 
+## 17. Steve's voxel sky-island world — DONE
+
+- [x] World system: a vehicle picks a world; worlds restyle track surfaces, hazards and fuel cells
+      and supply lights, sky, fog, scenery and bloom. Neon remains the default and is unchanged.
+- [x] 16×16 pixel textures generated in code (about 30 blocks plus mob skins), one atlas for scenery.
+- [x] Voxel mesher with face culling and baked ambient occlusion, sunset face lighting, glowing blocks.
+- [x] Floating-island tiles (trees, cottages, lanterns, vines, waterfalls, mobs, clouds, cloud sea)
+      at 10% of the car's speed; snow-capped ranges at 3%, hazed harder.
+- [x] Sky shader (gradient, stars, Milky Way, sun halo), square sun, bloom (strength 0.42, threshold 0.9).
+- [x] Track: deepslate/purpur/prismarine/terracotta, sea-lantern lane lights, block trims, lantern
+      posts outside the corridor; obsidian blocks, crying-obsidian gates, TNT barriers, emerald fuel.
+- [x] Menu: a floating grass-island turntable when Steve is selected.
+
+Scenery never collides and is never placed inside the corridor, so nothing decorative looks solid.
+Tiles are positioned relative to the camera (no large Float32 values). On the first frame and after
+a restart, nearby tiles build at once; tiles entering at the far edge build one per frame.
+Measured: island tile ~18 ms / ~17k triangles, mountain tile ~23 ms / ~30k triangles; world switch
+240 ms on the menu (it also precompiles shaders); 60 fps in Chromium at 1200×700.
+
+Tests (`tests/voxel-world.test.ts`): textures and atlas, mesher culling, AO and glow, deterministic
+tiles, corridor clearance, mountain placement, parallax speed and tile streaming, world selection,
+hazard kinds, lantern posts outside the corridor.
+Full run: **239 tests / 27 suites pass**; `npm run build` passes. Browser: Steve's world and the
+unchanged neon world checked in game; TNT barriers, gates, lantern posts, mobs and the menu island
+verified visually.
+
+## 18. Water for the boat, and vehicle contrast — DONE
+
+- [x] Steve's world floor is flowing water (two layers at different speeds and scales) in a stone-brick
+      channel. The sea-lantern lane lights stay, now submerged.
+- [x] The menu island has a grass rim around an animated pond, and the boat floats at its waterline.
+- [x] Contrast: the vehicle gets a gold outline (0.04 m smooth-normal hull, below the bloom threshold),
+      a fill light from behind the camera, and a dimmer car light (9 vs 30) so the water shows no hot spot.
+- [x] Static models are merged into one mesh per material (Steve: 171 parts → 3 meshes). Mirrored
+      parts keep their winding. Per-instance geometry is disposed on vehicle swap.
+
+The first pass at the water was too bright: with a near-white outline in the glow pass, Steve read as
+a white silhouette. The water was toned to 0.78–0.95 of its texture with less self-light and rougher
+highlights, and the outline made thinner and gold.
+
+Tests: merging keeps every triangle with one mesh per material; the outline appears in the voxel world
+and goes away in neon.
+Full run: **241 tests / 27 suites pass**; `npm run build` passes. Browser: the menu pond and the in-game
+water and outline checked on seed 2804205951.
+
+## 19. Steve's model restored, lantern posts removed — DONE
+
+- [x] Removed the vehicle outline and the static-mesh merging from increment 18. Steve's blocky head
+      rendered as a flat yellow shape. The model now draws exactly as loaded; the water floor, the
+      fill light and the dimmer car light already give enough contrast.
+- [x] Removed the lantern posts along the floor edges, and the slab-decoration hook that only they used.
+
+Full run: **238 tests / 27 suites pass** (three tests for the removed features dropped); `npm run build`
+passes. Browser: Steve renders normally and the track sides are clear (seed 2804205951).
+
+## 20. Main menu return, ceiling bars — DONE
+
+- [x] M (or a button) returns to the main menu from the pause and game-over screens. The run resets
+      for the next start, the best score is kept, and the vehicle can be changed again.
+- [x] Ceiling bars: a full-width bar, 0.6 m deep, hangs from a ceiling run (30% → 100% of runs with
+      difficulty, one per run). It is passed by cutting suction, dropping under it and holding Shift
+      again. Thinner bars let the contact solver push the car underneath without a crash, so they
+      were no obstacle.
+- [x] Re-catch margin: with gravity 20 the car left suction range 0.42 s after letting go, which was
+      too short for any bar. The drop stays as before. For 1.5 s after letting go of a ceiling,
+      suction reaches 8 m back to it and pulls at up to 100 m/s². Reach alone was not enough: a fast
+      drop hit the floor before the normal pull could stop it. A first version slowed the drop
+      instead, which was rejected in play.
+- [x] Planner: a new `hop` phase is timed in seconds from the bar, so every entry speed drops to the
+      same depth. Re-attaching to the ceiling after a bar is not a new arrival. The bar has its own
+      1 s notice after attaching; a full reaction interval would overheat suction. It passes the usual
+      ±0.15 s action and suction timing replays.
+
+Tests: holding suction crashes into the bar; cutting it passes for late cuts and for re-engaging from
+0.1 s before to 0.3 s after the nose reaches the bar; the drop is an ordinary fall, and the car is
+pulled back from beyond the normal 3 m range;
+planned bars are full-width, ceiling-mounted and have a validated route beneath; menu return works
+from pause and game over. Acceptance on seeds 100–111 at five difficulties: 60/60 ceiling, 60/60
+transition and 60/60 wall chunks, with bars in 35 ceiling and 35 transition chunks. The seam
+contract test allows 4 physics steps of drift (was 2; 1.8 m measured after a bar re-catch) and now
+includes obstacles and a trailing floor.
+Full run: **244 tests / 28 suites pass**; `npm run build` passes. Browser, seed 7
+(`?template=ceiling`): the bar is visible; the car dropped about 3.7 m under it and re-attached
+11 m past it; M returned to the menu, from which a new run started.
+
 ## Evidence / issues
 
 - Baseline environment had no `npm` on PATH; resolved with the verified local Node 22 distribution.

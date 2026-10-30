@@ -32,6 +32,7 @@ keypress is consumed so it cannot also fire the lift thrusters.
 | Hold Shift | Engage suction; release to let go and cool |
 | R | Restart (same seed) |
 | Esc | Pause |
+| M | Main menu (while paused or after a crash; also a button on both screens) |
 | H | Help overlay |
 | F3 | Toggle physics telemetry and the intended route |
 
@@ -50,6 +51,10 @@ Suction heats at 24 units/s on every surface and in the air; floor suction also 
 adds drag. The HUD warns at 75, locks suction off at 100, and allows reactivation below 35.
 Releasing Shift cools at 18 units/s. If Shift stays held through an overheat, suction resumes only after heat
 drops below 35 and fuel is available. A held wall or ceiling run therefore lasts about 4 seconds.
+
+Letting go of a ceiling, the car drops as usual. For 1.5 s afterwards, suction reaches 8 m back to
+that ceiling (instead of 3 m) and pulls at up to 100 m/s² (instead of 55), so holding Shift again
+recovers from a drop of several metres. This is the margin that makes ceiling bars passable.
 
 ## Score
 
@@ -81,6 +86,32 @@ The menu shows the credit and Sketchfab link for the selected model. The origina
 vertex colours and simplifies it to the 0.5 MB, 40k-triangle file the game loads. Add a vehicle in
 `src/render/vehicles.ts`.
 
+## Worlds
+
+A world restyles the track and supplies its surroundings; the course, physics and validation are
+the same in every world. Vehicles pick their world in `src/render/vehicles.ts`; worlds live in
+`src/render/worlds.ts`.
+
+- **Neon** (default): the synthwave grid and star shell.
+- **Voxel sky islands** (Steve in a Boat): a Minecraft-style sunset world, all generated in code.
+  - Track: the floor is a flowing water channel in stone-brick sides (Steve is in a boat) with
+    submerged sea-lantern lane lights. The ceiling is purpur, the walls are prismarine (left) and
+    terracotta (right) with glowing block trims.
+  - Contrast: a fill light from behind the camera lights the side of the vehicle you see, and the
+    car light is dimmed so the water does not mirror it.
+  - Hazards: obsidian blocks, crying-obsidian gates and TNT barriers. Fuel cells are emerald blocks
+    with orbiting experience orbs.
+  - Scenery: floating islands with trees, cottages with lit windows, lanterns, hanging vines,
+    waterfalls, creepers, zombies, skeletons, spiders and ghasts, plus clouds above and a cloud sea
+    below. It drifts past at 10% of the car's speed. Hazy snow-capped ranges drift at 3%.
+  - Sky: a gradient sky with stars, a Milky Way band and a square sun, finished with a bloom pass.
+  - Menu: the turntable becomes a floating island with a pond, and the boat floats on it.
+
+Scenery is visual only and never collides. Tiles are generated from the run seed and tile index (the
+same seed gives the same world), built at most one per frame at the far edge, and dropped behind.
+Textures are 16×16 pixel art generated in `src/render/voxel/textures.ts`. Islands are meshed with
+face culling and baked corner shading (`mesher.ts`).
+
 ## Terrain and validation
 
 The generator chooses a bounded movement plan before publishing geometry. Each candidate is replayed
@@ -92,7 +123,14 @@ worker and tests.
 Supported procedural families are floor runs, short flight gaps, ceiling crossings, either wall,
 ceiling-to-wall transitions (mirrored to either wall, with a short floor leg between them so suction
 can cool), extended surface-free flight, and barrier jumps: 1–3 full-width floor barriers, 1–2 m
-tall, cleared with a lift pulse and no suction. Barrier count and height rise with difficulty. Seeded
+tall, cleared with a lift pulse and no suction. Barrier count and height rise with difficulty.
+Ceiling runs (including the ceiling leg of a transition) may carry a full-width bar, 0.6 m deep,
+hanging from the ceiling. The chance is 30% at difficulty 0 and 100% at difficulty 1, one bar per run.
+It is passed by releasing Shift about 0.5 s before the bar, dropping under it, and holding Shift
+again as the nose reaches it. Re-engaging anywhere from 0.15 s before to 0.35 s after that moment
+still re-attaches. Keeping suction on crashes into it. The bar comes 1 s after attaching
+(it is in view during the climb), rather than a full reaction interval, which would overheat suction
+before the run ends. Seeded
 obstacles mount on floors, ceilings and both walls, including the opening road. Their physical
 colliders are part of world generation: placement respects the intended route and reaction margins,
 then the complete decorated chunk is replayed and validated again. Unreachable additions are rejected.

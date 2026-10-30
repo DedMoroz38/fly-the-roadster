@@ -1,5 +1,26 @@
 import * as THREE from 'three';
 import { CarModel } from './carModel';
+import { vehicleWorld } from './vehicles';
+import { blockAtlas, blockTexture } from './voxel/textures';
+import { B, meshVolume, Volume } from './voxel/mesher';
+import { sunsetLight } from './voxel/islands';
+
+const MENU_ISLAND = { radius: 7, depth: 4, block: 0.36, rim: 0.74 } as const;
+
+/** A small floating island: a grass rim around a pond, on a dirt-and-stone underside that tapers. */
+function menuIsland(): THREE.BufferGeometry {
+  const { radius: r, depth, block: size, rim } = MENU_ISLAND;
+  const v = new Volume(2 * r + 1, depth + 1, 2 * r + 1);
+  for (let i = -r; i <= r; i++) for (let k = -r; k <= r; k++) {
+    const d = Math.hypot(i, k) / (r + 0.4);
+    if (d > 1) continue;
+    const bottom = depth - Math.max(1, Math.round((1 - d * d) * depth));
+    // Inside the rim the ground sits one block lower, under the water.
+    const top = d > rim ? depth : depth - 1;
+    for (let y = bottom; y <= top; y++) v.set(i + r, y, k + r, y === top ? (d > rim ? B.grass : B.dirt) : y >= top - 1 ? B.dirt : B.stone);
+  }
+  return meshVolume(v, { blockSize: size, origin: [-(r + 0.5) * size, -(depth + 1) * size, -(r + 0.5) * size], light: sunsetLight })!;
+}
 
 /** Turntable speed in rad/s: about one turn every 6 s (9 s with reduced motion). */
 export const MENU_SPIN = { normal: 1.05, reduced: 0.7 } as const;
@@ -11,6 +32,9 @@ export class MenuScene {
   private readonly camera = new THREE.PerspectiveCamera(32, 1, 0.1, 40);
   private readonly car: CarModel;
   private readonly rings = new THREE.Group();
+  private readonly deck: THREE.Mesh;
+  private readonly island = new THREE.Group();
+  private readonly pondTexture: THREE.Texture;
   private readonly motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   private observer: ResizeObserver | null = null;
   private frame = 0;
@@ -45,10 +69,26 @@ export class MenuScene {
     this.car.setSuction(false, false);
     this.scene.add(this.car.group);
 
-    const deck = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 0.07, 80),
+    this.deck = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 0.07, 80),
       new THREE.MeshStandardMaterial({ color: 0x0b1528, metalness: 0.5, roughness: 0.5 }));
-    deck.position.y = -0.63;
-    this.scene.add(deck);
+    this.deck.position.y = -0.63;
+    this.scene.add(this.deck);
+    // Steve's world gets a little floating grass island for a turntable instead.
+    this.island.add(new THREE.Mesh(menuIsland(), new THREE.MeshBasicMaterial({ map: blockAtlas().texture, vertexColors: true, alphaTest: 0.5 })));
+    // The boat floats on a pond; the rim hides the water disc's edge.
+    this.pondTexture = blockTexture('water').clone();
+    this.pondTexture.wrapS = this.pondTexture.wrapT = THREE.RepeatWrapping;
+    this.pondTexture.repeat.set(4, 4);
+    this.pondTexture.needsUpdate = true;
+    const pond = new THREE.Mesh(new THREE.CircleGeometry(MENU_ISLAND.radius * MENU_ISLAND.rim * MENU_ISLAND.block + 0.3, 40),
+      new THREE.MeshBasicMaterial({ map: this.pondTexture, color: new THREE.Color(1.1, 1.15, 1.25), transparent: true, opacity: 0.9 }));
+    pond.rotation.x = -Math.PI / 2;
+    pond.position.y = -MENU_ISLAND.block * 0.25;
+    this.island.add(pond);
+    // Water level matches the boat's waterline.
+    this.island.position.y = -0.25;
+    this.scene.add(this.island);
+    this.applyWorld();
     for (const [index, color] of [0x42dfff, 0xb88aff].entries()) {
       const arc = new THREE.Mesh(new THREE.TorusGeometry(2.64, 0.018, 6, 80, Math.PI * 0.76),
         new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, toneMapped: false }));
@@ -84,6 +124,14 @@ export class MenuScene {
 
   setVehicle(id: string) {
     if (id !== this.car.vehicleId) this.car.setVehicle(id);
+    this.applyWorld();
+  }
+
+  private applyWorld() {
+    const voxel = vehicleWorld(this.car.vehicleId) === 'voxel';
+    this.island.visible = voxel;
+    this.deck.visible = !voxel;
+    this.rings.visible = !voxel;
   }
 
   /** Turntable spin always runs; reduced motion only slows it and drops the bob. */
@@ -94,6 +142,8 @@ export class MenuScene {
     this.car.group.rotation.set(0, this.spin, reduced ? 0 : Math.sin(this.time * 0.5) * 0.025);
     this.car.group.position.y = 0.06 + (reduced ? 0 : Math.sin(this.time * 1.25) * 0.07);
     this.rings.rotation.y = -this.time * (reduced ? 0.04 : 0.25);
+    this.island.rotation.y = this.spin;
+    this.pondTexture.offset.set(this.time * 0.05, this.time * 0.12);
   }
 
   private animate = (now: number) => {
@@ -110,6 +160,7 @@ export class MenuScene {
     if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.frame);
+    this.pondTexture.dispose();
     this.observer?.disconnect();
     window.removeEventListener('resize', this.resize);
     const geometries = new Set<THREE.BufferGeometry>();

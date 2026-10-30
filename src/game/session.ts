@@ -222,6 +222,18 @@ export class GameSession {
   /** Full reset: new physics world, regenerated course (same seed), full fuel, score 0. */
   restart() {
     if (this.state === 'ready') return;
+    this.resetAttempt();
+    this.state = 'running';
+  }
+
+  /** Leaves a paused or finished run for the main menu, with the course reset for the next start. */
+  returnToMenu() {
+    if (this.state === 'ready' || this.state === 'running') return;
+    this.resetAttempt();
+    this.state = 'ready';
+  }
+
+  private resetAttempt() {
     this.best = Math.max(this.best, this.score);
     this.sim.dispose();
     this.sim = this.createSim(this.seed);
@@ -234,7 +246,6 @@ export class GameSession {
     this.wasAirborne = false;
     this.prevRoll = this.sim.vehicle.roll;
     this.failReason = null;
-    this.state = 'running';
     this.helpOpen = false;
     this.attempt++;
   }
