@@ -10,9 +10,10 @@ export const DECORATOR_CONFIG = {
   routeClearance: 1.2,
   minSpan: 12,
   maxSpan: 24,
-  /** Floors carry the slalom; walls and ceilings get sparser hazards. */
-  maxObstacles: { floor: 6, ceiling: 3, left: 3, right: 3 } as Record<SurfaceType, number>,
-  obstacleSpacing: { floor: 24, ceiling: 45, left: 45, right: 45 } as Record<SurfaceType, number>,
+  /** [easiest, hardest] per surface. Floors carry the slalom; walls and ceilings get sparser hazards. */
+  maxObstacles: { floor: [4, 9], ceiling: [2, 4], left: [2, 4], right: [2, 4] } as Record<SurfaceType, [number, number]>,
+  /** Minimum gap between hazards at base top speed, [easiest, hardest]; scaled with chunk speed. */
+  obstacleSpacing: { floor: [24, 15], ceiling: [45, 28], left: [45, 28], right: [45, 28] } as Record<SurfaceType, [number, number]>,
   /** Extra floor candidates along each slab, so obstacles can fill lanes the route vacates. */
   floorCandidateStep: 6,
   obstacleWidth: 0.8,
@@ -20,26 +21,37 @@ export const DECORATOR_CONFIG = {
   obstacleHalfLength: { min: 1.6, max: 2.4 },
   supportInset: 1,
   obstacleClearance: 0.6,
+  /** Wall-to-wall gates with one opening on the route, [easiest, hardest] per chunk (rounded). */
+  gates: [-1, 3] as [number, number],
+  /** Minimum distance between gates at base top speed; scaled with chunk speed. */
+  gateSpacing: 40,
+  gateHalfLength: 0.6,
+  /** Extra opening width beyond the route clearance on each side. */
+  gateSlack: 0.3,
+  /** Narrowest gate segment worth placing beside the opening. */
+  gateMinWidth: 0.6,
 } as const;
 
-const depthPadding = CONFIG.car.halfExtents.z + DECORATOR_CONFIG.routeClearance
-  + CONFIG.car.maxForwardSpeed * (PLANNER_CONFIG.timingTolerance + PLANNER_CONFIG.sampleEverySteps / CONFIG.physicsHz);
+/** Route protection along the course grows with the chunk's top speed. */
+const depthPadding = (maxSpeed: number) => CONFIG.car.halfExtents.z + DECORATOR_CONFIG.routeClearance
+  + maxSpeed * (PLANNER_CONFIG.timingTolerance + PLANNER_CONFIG.sampleEverySteps / CONFIG.physicsHz);
+const byDifficulty = ([easy, hard]: [number, number], difficulty: number) => easy + (hard - easy) * difficulty;
 function crossExtents(p: RouteWaypoint) {
   const { x, y } = CONFIG.car.halfExtents;
   return { x: Math.abs(Math.cos(p.roll)) * x + Math.abs(Math.sin(p.roll)) * y,
     y: Math.abs(Math.sin(p.roll)) * x + Math.abs(Math.cos(p.roll)) * y };
 }
-function protectedFromBox(route: RouteWaypoint[], o: ObstacleLike): boolean {
+function protectedFromBox(route: RouteWaypoint[], o: ObstacleLike, padding: number): boolean {
   return route.every(p => {
-    if (Math.abs(p.d - o.d) > o.half.z + depthPadding) return true;
+    if (Math.abs(p.d - o.d) > o.half.z + padding) return true;
     const half = crossExtents(p);
     return Math.abs(p.x - o.x) > o.half.x + half.x + DECORATOR_CONFIG.routeClearance
       || Math.abs(p.y - o.y) > o.half.y + half.y + DECORATOR_CONFIG.routeClearance;
   });
 }
-function protectedFromSurface(route: RouteWaypoint[], slab: Omit<Slab, 'id'>): boolean {
+function protectedFromSurface(route: RouteWaypoint[], slab: Omit<Slab, 'id'>, padding: number): boolean {
   return route.every(p => {
-    if (p.d < slab.d0 - depthPadding || p.d > slab.d1 + depthPadding) return true;
+    if (p.d < slab.d0 - padding || p.d > slab.d1 + padding) return true;
     const h = crossExtents(p), margin = DECORATOR_CONFIG.routeClearance;
     switch (slab.surface) {
       case 'floor': return p.y > h.y + margin;
@@ -73,7 +85,11 @@ function placeSurfaceObstacles(base: PlannedChunk, extras: Omit<Slab, 'id'>[], r
   const obstacles: ObstacleLike[] = [];
   let nextId = base.obstacles.reduce((next, obstacle) => Math.max(next, obstacle.id + 1), 1);
   const edge = CONFIG.corridor.halfWidth;
+  const padding = depthPadding(base.pace.max), speedScale = base.pace.max / CONFIG.car.maxForwardSpeed;
   for (const surface of SURFACES) {
+    // Harder chunks carry more hazards, packed closer together (in seconds of travel).
+    const limit = Math.round(byDifficulty(DECORATOR_CONFIG.maxObstacles[surface], base.difficulty));
+    const spacing = byDifficulty(DECORATOR_CONFIG.obstacleSpacing[surface], base.difficulty) * speedScale;
     const spans = [...base.slabs, ...extras].filter(slab => slab.surface === surface);
     const sameSurface: ObstacleLike[] = [];
     const side = rng.chance(0.5) ? -1 : 1;
@@ -98,11 +114,11 @@ function placeSurfaceObstacles(base: PlannedChunk, extras: Omit<Slab, 'id'>[], r
           ? Array.from({ length: Math.floor((to - from) / DECORATOR_CONFIG.floorCandidateStep) + 1 }, (_, i) => from + i * DECORATOR_CONFIG.floorCandidateStep)
           : [from + (to - from) * pass];
         for (const d of positions) {
-          if (sameSurface.length >= DECORATOR_CONFIG.maxObstacles[surface]) break;
-          if (sameSurface.some(obstacle => Math.abs(obstacle.d - d) < DECORATOR_CONFIG.obstacleSpacing[surface])) continue;
+          if (sameSurface.length >= limit) break;
+          if (sameSurface.some(obstacle => Math.abs(obstacle.d - d) < spacing)) continue;
           for (const lane of lanes) {
             const obstacle = surfaceObstacle(surface, lane, d, halfLength, nextId);
-            if (!protectedFromBox(base.route, obstacle)
+            if (!protectedFromBox(base.route, obstacle, padding)
               || [...base.obstacles, ...obstacles].some(existing => boxesOverlap(existing, obstacle))) continue;
             obstacles.push(obstacle);
             sameSurface.push(obstacle);
@@ -114,6 +130,38 @@ function placeSurfaceObstacles(base: PlannedChunk, extras: Omit<Slab, 'id'>[], r
     }
   }
   return obstacles;
+}
+
+/**
+ * Gates span the floor wall to wall except one opening where the route passes, so the player has to
+ * line up with it. Openings away from the centre are preferred because they force a lane change.
+ */
+function placeGates(base: PlannedChunk, rng: Rng): ObstacleLike[] {
+  const count = Math.round(byDifficulty(DECORATOR_CONFIG.gates, base.difficulty));
+  if (count <= 0) return [];
+  const { gateHalfLength, gateSlack, gateMinWidth, obstacleDepth, supportInset } = DECORATOR_CONFIG;
+  const edge = CONFIG.corridor.halfWidth;
+  const padding = depthPadding(base.pace.max);
+  const spacing = DECORATOR_CONFIG.gateSpacing * base.pace.max / CONFIG.car.maxForwardSpeed;
+  const halfGap = CONFIG.car.halfExtents.x + DECORATOR_CONFIG.routeClearance + gateSlack;
+  const floors = base.slabs.filter(s => s.surface === 'floor');
+  const supported = (d: number) => floors.some(s => s.d0 + LEAD_BEVEL + supportInset <= d - gateHalfLength && s.d1 - supportInset >= d + gateHalfLength);
+  const candidates = base.route.filter(p => p.surface === 'floor' && Math.abs(p.roll) < 0.1 && supported(p.d))
+    .map(p => ({ p, order: Math.abs(p.x) + rng.next() * 0.5 }))
+    .sort((a, b) => b.order - a.order);
+  const gates: ObstacleLike[] = [];
+  let nextId = base.obstacles.reduce((next, obstacle) => Math.max(next, obstacle.id + 1), 1);
+  for (const { p } of candidates) {
+    if (gates.length / 2 >= count) break;
+    if (gates.some(g => Math.abs(g.d - p.d) < spacing)) continue;
+    const parts = ([[-edge, p.x - halfGap], [p.x + halfGap, edge]] as const).filter(([a, b]) => b - a >= gateMinWidth);
+    const pieces = parts.map(([a, b]) => ({ id: 0, x: (a + b) / 2, y: obstacleDepth, d: p.d,
+      half: { x: (b - a) / 2, y: obstacleDepth, z: gateHalfLength } }));
+    if (!pieces.length || !pieces.every(o => protectedFromBox(base.route, o, padding))) continue;
+    if (pieces.some(o => base.obstacles.some(existing => boxesOverlap(existing, o)))) continue;
+    for (const piece of pieces) gates.push({ ...piece, id: nextId++ });
+  }
+  return gates;
 }
 
 /** Seeded optional geometry is only retained after every actual-physics replay succeeds again. */
@@ -132,11 +180,17 @@ export function decorateChunk(base: PlannedChunk): PlannedChunk {
     const surface = rng.pick<SurfaceType>(['left', 'right', 'ceiling']);
     const slab = { surface, d0: start, d1: start + length };
     const overlaps = [...base.slabs, ...extras].some(s => s.surface === surface && s.d0 < slab.d1 + 2 && s.d1 > slab.d0 - 2);
-    if (!overlaps && protectedFromSurface(base.route, slab)) extras.push(slab);
+    if (!overlaps && protectedFromSurface(base.route, slab, depthPadding(base.pace.max))) extras.push(slab);
   }
-  const obstacles = placeSurfaceObstacles(base, extras, rng);
-  if (!extras.length && !obstacles.length) return base;
-  const decorated = recertifyPlan({ ...base, slabs: [...base.slabs, ...extras], obstacles: [...base.obstacles, ...obstacles] });
-  // Bounded work: one proposal and its full validation. Unsafe decoration never weakens a route.
-  return decorated.validation.accepted ? decorated : base;
+  const gates = placeGates(base, rng);
+  const obstacles = placeSurfaceObstacles({ ...base, obstacles: [...base.obstacles, ...gates] }, extras, rng);
+  if (!extras.length && !obstacles.length && !gates.length) return base;
+  // Bounded work: at most two proposals, each fully revalidated. If the full set fails, gates are the
+  // likeliest cause, so retry without them. Unsafe decoration never weakens a route.
+  for (const added of gates.length ? [[...gates, ...obstacles], obstacles] : [obstacles]) {
+    if (!extras.length && !added.length) break;
+    const decorated = recertifyPlan({ ...base, slabs: [...base.slabs, ...extras], obstacles: [...base.obstacles, ...added] });
+    if (decorated.validation.accepted) return decorated;
+  }
+  return base;
 }

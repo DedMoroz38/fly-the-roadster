@@ -121,6 +121,12 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
 .main-menu__arrow { color: #6de1ff; font-size: 20px; font-weight: 400; line-height: .7; }
 .main-menu__launch:hover .main-menu__start, .main-menu__launch:focus-visible .main-menu__start { border-color: #a1ecff; background: linear-gradient(110deg, #21627a99, #35385c99); box-shadow: 0 0 40px #47cfff22, inset 0 1px #c2f3ff22; }
 .main-menu__click-hint { display: block; margin-top: 11px; color: #6c829d; font-size: 11px; letter-spacing: .04em; }
+.main-menu__garage { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 18px; }
+.main-menu__vehicle { min-width: 150px; color: #e4f5ff; font-size: 13px; font-weight: 600; letter-spacing: .16em; text-align: center; text-transform: uppercase; }
+.main-menu__pick { display: grid; place-items: center; width: 34px; height: 34px; padding: 0 0 3px; border: 1px solid #78ddff55; border-radius: 50%; background: #17465d40; color: #bdefff; font: inherit; font-size: 22px; line-height: 1; cursor: pointer; transition: border-color .18s, background .18s; }
+.main-menu__pick:hover, .main-menu__pick:focus-visible { border-color: #a1ecff; background: #21627a80; outline: none; }
+.main-menu__credit { min-height: 1.5em; margin: 9px 0 0; color: #61758f; font-size: 10px; letter-spacing: .03em; text-align: center; }
+.main-menu__credit a { color: #8fb6d4; }
 .main-menu__controls { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px 24px; margin-top: 24px; color: #8ca2ba; font-size: 11px; }
 .main-menu__controls > span { display: flex; align-items: center; gap: 7px; }
 .main-menu__controls kbd { min-width: 0; padding: 3px 6px; border: 1px solid #7088a530; background: #a4c8ff06; border-radius: 4px; color: #b4c9df; font-size: 10px; letter-spacing: .04em; }
@@ -148,4 +154,4 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
   .main-menu__controls { margin-top: 14px; }
   .main-menu__start { padding: 9px 16px; }
 }
-@media (prefers-reduced-motion: reduce) { .main-menu__start { transition: none; } .flip-award { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .main-menu__start, .main-menu__pick { transition: none; } .flip-award { animation: none; } }

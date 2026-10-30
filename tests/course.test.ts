@@ -38,7 +38,8 @@ describe('validated course streaming', () => {
     const minChunkLength = PLANNER_CONFIG.leadMin + CONFIG.car.maxForwardSpeed * PLANNER_CONFIG.recoverySeconds;
     const maxPlans = Math.ceil((STREAM.generateAhead + STREAM.keepBehind) / minChunkLength) + 1;
     const maxBuiltPlans = Math.ceil((STREAM.buildAhead + STREAM.keepBehind) / minChunkLength) + 1;
-    const maxObstaclesPerChunk = SURFACES.reduce((sum, surface) => sum + DECORATOR_CONFIG.maxObstacles[surface], 0);
+    const maxObstaclesPerChunk = PLANNER_CONFIG.hurdleCount.max
+      + SURFACES.reduce((sum, surface) => sum + DECORATOR_CONFIG.maxObstacles[surface][1], 0);
     try {
       for (let distance = 0; distance <= 50_000; distance += 500) {
         course.update(distance);

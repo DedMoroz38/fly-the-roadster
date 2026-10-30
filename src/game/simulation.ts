@@ -72,6 +72,8 @@ export class Simulation {
   step(controls: ControlState) {
     this.prevPose = this.pose();
     this.level.update(this.distance);
+    const pace = this.level.paceAt?.(this.distance);
+    if (pace) { this.vehicle.cruiseSpeed = pace.cruise; this.vehicle.maxSpeed = pace.max; }
     const slabVersion = this.level.slabs.version, obstacleVersion = this.level.obstacles?.version ?? 0;
     if (slabVersion !== this.queriedSlabVersion || obstacleVersion !== this.queriedObstacleVersion) {
       // Streaming may replace a joined surface collider between physics steps.

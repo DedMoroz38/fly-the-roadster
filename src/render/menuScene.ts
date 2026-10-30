@@ -9,7 +9,7 @@ export class MenuScene {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(32, 1, 0.1, 40);
-  private readonly car = new CarModel();
+  private readonly car: CarModel;
   private readonly rings = new THREE.Group();
   private readonly motion = window.matchMedia('(prefers-reduced-motion: reduce)');
   private observer: ResizeObserver | null = null;
@@ -19,7 +19,8 @@ export class MenuScene {
   private spin = -2.45;
   private disposed = false;
 
-  constructor(private readonly host: HTMLElement) {
+  constructor(private readonly host: HTMLElement, vehicleId?: string) {
+    this.car = new CarModel(vehicleId);
     this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.setClearColor(0x000000, 0);
@@ -80,6 +81,10 @@ export class MenuScene {
     this.camera.updateProjectionMatrix();
     this.renderer.render(this.scene, this.camera);
   };
+
+  setVehicle(id: string) {
+    if (id !== this.car.vehicleId) this.car.setVehicle(id);
+  }
 
   /** Turntable spin always runs; reduced motion only slows it and drops the bob. */
   private pose(dt: number) {

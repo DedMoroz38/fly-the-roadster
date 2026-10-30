@@ -3,10 +3,9 @@ import { Level, SlabSet, ObstacleSet, PickupLike } from '../physics/level';
 import type { Slab } from '../surfaces';
 import type { CourseDebugInfo } from '../session';
 import { ChunkSource, SynchronousChunkSource } from './chunkSource';
-import { GENERATOR_CONFIG, difficultyAt } from './generatorConfig';
+import { GENERATOR_CONFIG, difficultyAt, paceFor } from './generatorConfig';
 import { GeneratedChunk, GeneratorOptions } from './routeGenerator';
 import type { RouteWaypoint } from './planner';
-import { CONFIG } from '../config';
 
 export const STREAM = GENERATOR_CONFIG;
 export interface CourseOptions extends GeneratorOptions { source?: ChunkSource }
@@ -72,7 +71,11 @@ export class Course implements Level {
 
   /** Slow/erroring generation freezes simulation before the car can reach missing terrain. */
   needsBuffer(distance: number) {
-    return !!this.source.error || this.source.frontier - distance < CONFIG.car.maxForwardSpeed * 2;
+    return !!this.source.error || this.source.frontier - distance < paceFor(1).max * 2;
+  }
+  /** Each chunk's validated speed applies from its start; before the first chunk, the base pace. */
+  paceAt(distance: number) {
+    return this.chunks.find(c => distance >= c.d0 && distance < c.d1)?.pace;
   }
   collect(id: number) { return this.activePickups.delete(id); }
   /** Logical course distances stay unchanged while physics uses a nearby origin. */

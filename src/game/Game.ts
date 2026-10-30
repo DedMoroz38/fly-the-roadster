@@ -1,7 +1,7 @@
 import { FixedStepper } from '../core/fixedStep';
 import { InputManager } from './input';
 import { Simulation, initPhysics } from './simulation';
-import { loadCarBody } from '../render/carModel';
+import { getSelectedVehicle, loadVehicle, setSelectedVehicle, VEHICLES, vehicleById } from '../render/vehicles';
 import { Course } from './course/course';
 import { WorkerChunkSource } from './course/workerSource';
 import { SCENARIOS } from './course/routeGenerator';
@@ -32,6 +32,8 @@ export class Game {
   })();
 
   private terrainSource: WorkerChunkSource | null = null;
+  /** The chosen vehicle look, remembered across visits. */
+  vehicleId = getSelectedVehicle();
 
   constructor(private host: HTMLElement) {}
 
@@ -44,7 +46,7 @@ export class Game {
     const initialSource = new WorkerChunkSource(this.seed, { template });
     this.terrainSource = initialSource;
     // The car mesh loads alongside the opening terrain; a failed load is logged, not fatal.
-    try { await Promise.all([initialSource.ready, loadCarBody().catch(() => undefined)]); }
+    try { await Promise.all([initialSource.ready, loadVehicle(this.vehicleId).catch(() => undefined)]); }
     catch (error) { initialSource.dispose(); if (!this.disposed) throw error; return; }
     if (this.disposed) { initialSource.dispose(); return; }
     this.renderer = new GameRenderer(this.host);
@@ -74,6 +76,20 @@ export class Game {
     this.listeners.add(fn);
     if (this.session) fn(this.session.snapshot());
     return () => this.listeners.delete(fn);
+  }
+
+  /** Menu choice of vehicle look; the physics body is the same for every vehicle. */
+  selectVehicle(id: string) {
+    if (this.session?.state !== 'ready') return;
+    this.vehicleId = vehicleById(id).id;
+    setSelectedVehicle(this.vehicleId);
+    this.renderer?.car.setVehicle(this.vehicleId);
+    this.emit(true);
+  }
+
+  cycleVehicle(step: number) {
+    const index = VEHICLES.findIndex(v => v.id === this.vehicleId);
+    this.selectVehicle(VEHICLES[(index + step + VEHICLES.length) % VEHICLES.length].id);
   }
 
   /** Space on the menu is consumed here so it cannot also fire the lift thrusters. */
@@ -122,6 +138,9 @@ export class Game {
 
     if (s.state === 'ready') {
       if (this.input.consumePress('thrust')) this.startRun();
+      // The roll arrows pick a vehicle on the menu.
+      if (this.input.consumePress('rollLeft')) this.cycleVehicle(-1);
+      if (this.input.consumePress('rollRight')) this.cycleVehicle(1);
       // No shortcut can bypass the menu or queue a later action.
       for (const action of ['restart', 'pause', 'help', 'debug'] as const) this.input.consumePress(action);
     } else {

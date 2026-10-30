@@ -1,11 +1,14 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { Rng } from '../src/core/rng';
 import { Course } from '../src/game/course/course';
-import { difficultyAt, GENERATOR_CONFIG } from '../src/game/course/generatorConfig';
+import { difficultyAt, GENERATOR_CONFIG, paceFor } from '../src/game/course/generatorConfig';
 import { PLANNER_CONFIG } from '../src/game/course/plannerConfig';
+import { chunkTiming } from '../src/game/course/planner';
 import { ReachableCourseGenerator } from '../src/game/course/routeGenerator';
 import { CONFIG } from '../src/game/config';
 import { initPhysics, Simulation } from '../src/game/simulation';
+import { StaticLevel } from '../src/game/physics/level';
+import { emptyControls } from '../src/game/input';
 
 beforeAll(initPhysics);
 
@@ -26,7 +29,7 @@ describe('opening challenge pacing', () => {
           expect(chunk.kind).not.toBe('normal');
           expect(chunk.generation.fallback).toBe(false);
           expect(chunk.validation.accepted).toBe(true);
-          expect(chunk.validation.minReactionSeconds).toBeGreaterThanOrEqual(PLANNER_CONFIG.reactionSeconds);
+          expect(chunk.validation.minReactionSeconds).toBeGreaterThanOrEqual(chunkTiming(chunk.difficulty).reaction);
           expect(chunk.validation.timingTolerance).toBe(PLANNER_CONFIG.timingTolerance);
           expect(chunk.exit.fuel).toBeGreaterThanOrEqual(PLANNER_CONFIG.exitFuelReserve);
         }
@@ -91,18 +94,45 @@ describe('opening challenge pacing', () => {
     expect(centreBlocks).toBeGreaterThan(0);
   }, 120000);
 
-  it('raises opening difficulty by 50% and continues increasing after the first kilometre', () => {
+  it('ramps difficulty quickly and keeps it climbing well past the first kilometre', () => {
     expect(difficultyAt(0)).toBe(0);
-    for (const distance of [100, 250, 500, 1000]) {
-      const previousLog = Math.log1p(distance / GENERATOR_CONFIG.difficultyScale);
-      const previousDifficulty = previousLog / (previousLog + GENERATOR_CONFIG.difficultyCurve);
-      expect(difficultyAt(distance)).toBeCloseTo(previousDifficulty * 1.5, 8);
-    }
+    expect(difficultyAt(200)).toBeGreaterThan(0.38);
+    expect(difficultyAt(200)).toBeLessThan(0.46);
+    expect(difficultyAt(5000) - difficultyAt(1000)).toBeGreaterThan(0.18);
     const distances = [0, 100, 500, 999, 1000, 1001, 2000, 5000, 1000000];
     for (let i = 1; i < distances.length; i++) {
       expect(difficultyAt(distances[i])).toBeGreaterThan(difficultyAt(distances[i - 1]));
-      expect(difficultyAt(distances[i])).toBeLessThan(1);
+      expect(difficultyAt(distances[i])).toBeLessThanOrEqual(1);
     }
     expect(difficultyAt(1001) - difficultyAt(999)).toBeLessThan(0.001);
   });
+
+  it('raises cruise speed with difficulty and drives each chunk at its own validated pace', () => {
+    expect(paceFor(0)).toEqual({ cruise: CONFIG.car.cruiseSpeed, max: CONFIG.car.maxForwardSpeed });
+    expect(paceFor(1).cruise).toBe(CONFIG.car.cruiseSpeed + GENERATOR_CONFIG.speedGain);
+    expect(paceFor(1).max - paceFor(1).cruise).toBe(CONFIG.car.maxForwardSpeed - CONFIG.car.cruiseSpeed);
+    const chunks = new ReachableCourseGenerator(42).generateUntil(3000);
+    expect(chunks[0].pace.cruise).toBe(CONFIG.car.cruiseSpeed);
+    expect(chunks.at(-1)!.pace.cruise).toBeGreaterThan(CONFIG.car.cruiseSpeed + 9);
+    for (const chunk of chunks) {
+      expect(chunk.validation.accepted).toBe(true);
+      expect(chunk.generation.fallback).toBe(false);
+    }
+    // The course reports each chunk's pace, and the simulation drives the car toward it.
+    const course = new Simulation({ createLevel: world => new Course(world, 42) });
+    try {
+      const chunk = (course.level as Course).chunks[2];
+      expect(course.level.paceAt!((chunk.d0 + chunk.d1) / 2)).toEqual(chunk.pace);
+    } finally { course.dispose(); }
+    const pace = paceFor(1);
+    const sim = new Simulation({ createLevel: world => {
+      const level = new StaticLevel(world, [{ surface: 'floor', d0: -20, d1: 2000 }]);
+      level.paceAt = () => pace;
+      return level;
+    } });
+    try {
+      for (let i = 0; i < 6 * 60; i++) sim.step(emptyControls());
+      expect(sim.vehicle.forwardSpeed).toBeCloseTo(pace.cruise, 1);
+    } finally { sim.dispose(); }
+  }, 120000);
 });

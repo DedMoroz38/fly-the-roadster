@@ -1,5 +1,5 @@
 import { hashSeed, Rng } from '../../core/rng';
-import { difficultyAt, GENERATOR_CONFIG } from './generatorConfig';
+import { difficultyAt, GENERATOR_CONFIG, paceFor } from './generatorConfig';
 import { decorateChunk } from './decorator';
 import { initialReachableState, planChunk, PlannedChunk, ReachableState, ScenarioKind } from './planner';
 
@@ -34,9 +34,10 @@ export class ReachableCourseGenerator {
 
   private chooseKind(rng: Rng, difficulty: number): ScenarioKind {
     if (this.options.template) return this.options.template;
-    if (this.nextId % GENERATOR_CONFIG.recoveryEvery === 0) return 'normal';
+    // Breathers thin out as the run gets harder: forced floor runs stop at recoveryUntil.
+    if (this.nextId % GENERATOR_CONFIG.recoveryEvery === 0 && (this.nextId === 0 || difficulty < GENERATOR_CONFIG.recoveryUntil)) return 'normal';
     // Introduce two challenges after the warmup before allowing optional extra recovery.
-    if (rng.chance(GENERATOR_CONFIG.easySectionChance) && this.nextId > GENERATOR_CONFIG.openingChallengeChunks) return 'normal';
+    if (rng.chance(GENERATOR_CONFIG.easySectionChance * (1 - difficulty)) && this.nextId > GENERATOR_CONFIG.openingChallengeChunks) return 'normal';
     const weighted: [ScenarioKind, number][] = [
       // Surface challenges dominate; short floor gaps fade out as difficulty rises.
       ['gap', 1.4 - difficulty * 0.6],
@@ -55,6 +56,8 @@ export class ReachableCourseGenerator {
   next(): GeneratedChunk {
     const chunkSeed = hashSeed(`${this.seed >>> 0}:${this.nextId}`);
     const difficulty = difficultyAt(this.frontier);
+    // A fallback road keeps the requested pace, so the car never slows down abruptly.
+    const pace = paceFor(difficulty);
     const kind = this.chooseKind(new Rng(chunkSeed), difficulty);
     const rejectedReasons: string[] = [];
     let accepted: PlannedChunk | null = null;
@@ -62,7 +65,7 @@ export class ReachableCourseGenerator {
     for (; attempts < GENERATOR_CONFIG.candidateAttempts; attempts++) {
       const candidate = planChunk({
         id: this.nextId, seed: hashSeed(`${chunkSeed}:${attempts}`), d0: this.frontier,
-        kind, difficulty, entry: { ...this.exitState },
+        kind, difficulty, pace, entry: { ...this.exitState },
         intro: this.nextId === 0 && !this.options.template,
       });
       if (candidate.validation.accepted) { accepted = candidate; attempts++; break; }
@@ -72,7 +75,7 @@ export class ReachableCourseGenerator {
     if (!accepted) {
       accepted = planChunk({
         id: this.nextId, seed: chunkSeed, d0: this.frontier,
-        kind: 'normal', difficulty: 0, entry: { ...this.exitState },
+        kind: 'normal', difficulty: 0, pace, entry: { ...this.exitState },
       });
       // A broken movement configuration must be reported, never silently certified as safe.
       if (!accepted.validation.accepted) throw new Error(`Recovery route rejected: ${accepted.validation.reasons.join('; ')}`);

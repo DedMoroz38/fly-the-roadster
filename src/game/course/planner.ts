@@ -7,6 +7,7 @@ import { Simulation } from '../simulation';
 import { FailureMonitor } from '../session';
 import type { Slab, SurfaceType } from '../surfaces';
 import { PLANNER_CONFIG as P } from './plannerConfig';
+import { paceFor, type Pace } from './generatorConfig';
 
 export type ScenarioKind = 'normal' | 'gap' | 'ceiling' | 'wall-left' | 'wall-right' | 'multiple' | 'flight' | 'hurdle';
 export interface ReachableState {
@@ -50,7 +51,7 @@ export interface PlanValidation {
   entrySpeedEnvelope: { min: number; max: number };
 }
 export interface PlannedChunk {
-  id: number; seed: number; d0: number; d1: number; kind: ScenarioKind; difficulty: number;
+  id: number; seed: number; d0: number; d1: number; kind: ScenarioKind; difficulty: number; pace: Pace;
   slabs: Omit<Slab, 'id'>[]; pickups: PickupLike[]; obstacles: ObstacleLike[]; route: RouteWaypoint[];
   plan: ManeuverPhase[]; entry: ReachableState; exit: ReachableState; validation: PlanValidation;
   witness: { dt: number; controls: ControlState[]; samples: RouteWaypoint[]; phaseIndices: number[] };
@@ -59,21 +60,41 @@ export interface PlanChunkOptions {
   id: number; seed: number; d0: number; kind: ScenarioKind; difficulty: number; entry: ReachableState;
   /** Short opening floor only; later recovery sections retain their full duration. */
   intro?: boolean;
+  /** Speed targets for the chunk; defaults to the pace of its difficulty. */
+  pace?: Pace;
 }
-interface Blueprint { phases: ManeuverPhase[]; supports: Omit<Slab, 'id'>[]; pickups: PickupLike[]; obstacles: ObstacleLike[]; end: number; required: SurfaceType[] }
+interface Blueprint { phases: ManeuverPhase[]; supports: Omit<Slab, 'id'>[]; pickups: PickupLike[]; obstacles: ObstacleLike[]; end: number; required: SurfaceType[]; pace: Pace; timing: ChunkTiming }
+
+/** Seconds of run-up before a maneuver and of recovery floor after it; both shrink with difficulty. */
+export interface ChunkTiming { reaction: number; recovery: number }
+export function chunkTiming(difficulty: number): ChunkTiming {
+  const d = clamp(difficulty, 0, 1);
+  return { reaction: P.reactionSeconds + (P.reactionSecondsHardest - P.reactionSeconds) * d,
+    recovery: P.recoverySeconds + (P.recoverySecondsHardest - P.recoverySeconds) * d };
+}
 
 /** First choose maneuvers and support intervals; physical slabs are built from those intervals. */
-function blueprint(kind: ScenarioKind, seed: number, difficulty: number, entry: ReachableState, intro = false): Blueprint {
+function blueprint(kind: ScenarioKind, seed: number, difficulty: number, entry: ReachableState, pace: Pace, intro = false): Blueprint {
   const rng = new Rng(seed);
+  // Planner distances are tuned at the base top speed. Scaling them with this chunk's top speed
+  // keeps every maneuver, reaction interval and heat window the same length in seconds.
+  const k = pace.max / CONFIG.car.maxForwardSpeed, m = (metres: number) => metres * k;
   // The reaction interval runs from the latest touchdown, which may be in the previous chunk.
-  const settled = Math.max(0, entry.lastArrival + CONFIG.car.maxForwardSpeed * P.reactionSeconds + P.reactionMargin);
-  const baseLead = rng.int(P.leadMin, P.leadMax);
-  const leadAfter = (launchLead: number) => Math.max(baseLead, Math.ceil(settled + launchLead));
+  const timing = chunkTiming(difficulty);
+  const reach = pace.max * timing.reaction + m(P.reactionMargin);
+  const settled = Math.max(0, entry.lastArrival + reach);
+  const tighten = 1 - P.slalomTightening * difficulty;
+  // Past the opening, every run-up is long enough to weave at least once before its launch.
+  const weaveRoom = intro || difficulty <= 0 ? 0 : P.pickupInset + 4 + m(P.slalomSegment.max * tighten + P.weaveSettle);
+  const baseLead = m(rng.int(P.leadMin, P.leadMax));
+  const leadAfter = (launchLead: number) => Math.max(baseLead, weaveRoom + launchLead, Math.ceil(settled + launchLead));
   const traversalExtra = rng.int(0, P.traversalVariation);
-  const traversal = P.surfaceTraversal + traversalExtra;
+  const traversal = m(P.surfaceTraversal + traversalExtra);
   const setupX = CONFIG.corridor.halfWidth - P.setupWallDistance;
   const wallX = CONFIG.corridor.halfWidth - CONFIG.car.halfExtents.y;
-  const recovery = CONFIG.car.maxForwardSpeed * P.recoverySeconds;
+  const surfaceKind = kind === 'ceiling' || kind === 'multiple' || kind === 'wall-left' || kind === 'wall-right';
+  const recovery = pace.max * (surfaceKind ? Math.max(timing.recovery, P.surfaceCooldownSeconds) : timing.recovery);
+  const laneChange = () => m(rng.int(P.slalomSegment.min, P.slalomSegment.max) * tighten);
   const phases: ManeuverPhase[] = [];
   const supports: Omit<Slab, 'id'>[] = [];
   const obstacles: ObstacleLike[] = [];
@@ -86,46 +107,78 @@ function blueprint(kind: ScenarioKind, seed: number, difficulty: number, entry: 
   const support = (surface: SurfaceType, d0: number, d1: number) => supports.push({ surface, d0, d1, bevel: d0 !== 0 });
   /** Sideways setup, launch, wall traversal and drop back to the floor; returns where the wall run ends. */
   const wallCrossing = (side: SurfaceType, lead: number) => {
-    const sign = side === 'left' ? -1 : 1, wallEnd = lead + traversal + P.wallAttachDelay;
-    drive(lead - 12, 'floor', sign * setupX);
+    const sign = side === 'left' ? -1 : 1, wallEnd = lead + traversal + m(P.wallAttachDelay);
+    drive(lead - m(12), 'floor', sign * setupX);
     phases.push({ action: 'launch', label: `launch toward ${side} wall`, duration: P.wallLiftSeconds, suction: false });
     roll(sign * Math.PI / 2);
     catchSurface(side);
     drive(wallEnd, side, sign * wallX, P.wallReturnHeight);
     roll(0);
     catchSurface('floor');
-    support(side, lead - P.supportOverlap, wallEnd + P.wallDropPad);
+    support(side, lead - m(P.supportOverlap), wallEnd + m(P.wallDropPad));
     required.push(side);
     return wallEnd;
   };
-  // Floor runs weave between lanes; the decorator then blocks the lanes the route leaves.
-  const slalom = (untilD: number) => {
-    // Pass the entry fuel cell centred before the first lane change.
-    let d = P.pickupInset + 4, side = rng.chance(0.5) ? -1 : 1;
-    drive(d);
-    while (untilD - d > P.slalomSegment.max + P.slalomExit) {
-      d += rng.int(P.slalomSegment.min, P.slalomSegment.max);
-      phases.push({ action: 'drive', label: `slalom ${side < 0 ? 'left' : 'right'}`, untilD: d, surface: 'floor',
-        x: side * rng.range(P.slalomLane.min, P.slalomLane.max), y: 5, suction: false });
+  /**
+   * Floor stretch from `from` to `untilD` that weaves between lanes wherever a lane change fits, then
+   * holds a lane for `settle` metres: `endX` when given, otherwise the current lane (a launch from
+   * the floor works from any lane). The decorator blocks the lanes the route leaves. With `barriers`,
+   * some lane changes become jumps over low full-width barriers, each after a full run-up.
+   */
+  const floorRun = (from: number, untilD: number, endX: number | null = null, settle: number = P.weaveSettle, barriers = false) => {
+    if (intro || difficulty <= 0) { drive(untilD, 'floor', endX ?? 0); return; }
+    const stop = untilD - m(settle);
+    let d = from, side = rng.chance(0.5) ? -1 : 1, lane = 0, jumps = 0, jumpFrom = settled;
+    for (;;) {
+      const landing = d + m(P.hurdleLanding);
+      if (barriers && landing <= stop && d >= jumpFrom && jumps < P.floorBarrierMax && rng.chance(P.floorBarrierChance * difficulty)) {
+        const height = P.floorBarrierHeight.min + rng.next() * (P.floorBarrierHeight.max - P.floorBarrierHeight.min);
+        phases.push({ action: 'flight', label: 'jump barrier', duration: P.hurdleLiftSeconds, pulses: [[0, P.hurdleLiftSeconds]], suction: false });
+        catchSurface('floor');
+        obstacles.push({ id: obstacles.length + 1, x: 0, y: height / 2, d: d + m(P.hurdleOffset),
+          half: { x: CONFIG.corridor.halfWidth, y: height / 2, z: P.hurdleHalfLength } });
+        d = landing;
+        jumpFrom = d + reach;
+        jumps++;
+        continue;
+      }
+      const next = d + laneChange();
+      if (next > stop) break;
+      d = next;
+      lane = side * rng.range(P.slalomLane.min, P.slalomLane.max);
+      phases.push({ action: 'drive', label: `slalom ${side < 0 ? 'left' : 'right'}`, untilD: d, surface: 'floor', x: lane, y: 5, suction: false });
       side = -side;
     }
-    drive(untilD);
+    drive(untilD, 'floor', endX ?? lane);
+  };
+  // Pass the entry fuel cell centred before weaving toward the first maneuver.
+  const leadIn = (untilD: number, endX: number | null = null, settle: number = P.weaveSettle) => {
+    const from = Math.min(untilD, P.pickupInset + 4);
+    drive(from);
+    floorRun(from, untilD, endX, settle);
+  };
+  // After the final touchdown, weave on the recovery road and finish centred for the next chunk.
+  const recoveryRun = (landing: number) => {
+    const from = Math.min(end, landing + m(15));
+    drive(from);
+    floorRun(from, end, 0, P.slalomExit);
   };
   if (kind === 'normal') {
     // The opening and the difficulty-0 fallback stay straight; other floor sections are slaloms.
-    end = intro ? rng.int(P.introMin, P.introMax) : difficulty > 0 ? rng.int(P.slalomMin, P.slalomMax) : baseLead + recovery;
-    if (intro || difficulty <= 0) drive(end);
-    else slalom(end);
+    end = intro ? rng.int(P.introMin, P.introMax) : difficulty > 0 ? m(rng.int(P.slalomMin, P.slalomMax)) : baseLead + recovery;
+    drive(P.pickupInset + 4);
+    floorRun(P.pickupInset + 4, end, 0, P.slalomExit, true);
     support('floor', 0, end);
   } else if (kind === 'gap' || kind === 'flight') {
-    const gap = kind === 'gap' ? P.gapMin + difficulty * (P.gapMax - P.gapMin) : P.flightMin + difficulty * (P.flightMax - P.flightMin);
-    const lead = leadAfter(P.gapLaunchLead);
-    drive(lead - P.gapLaunchLead);
+    const gap = m(kind === 'gap' ? P.gapMin + difficulty * (P.gapMax - P.gapMin) : P.flightMin + difficulty * (P.flightMax - P.flightMin));
+    const lead = leadAfter(m(P.gapLaunchLead));
+    // Long flights land far down the road; launching centred keeps the landing near the centre line.
+    leadIn(lead - m(P.gapLaunchLead), 0, P.weaveSettle);
     phases.push({ action: 'flight', label: kind === 'gap' ? 'lift across gap' : 'extended flight', duration: kind === 'gap' ? 3.4 : 4.2,
       pulses: kind === 'gap' ? [[0, 0.7]] : [[0, 0.5], [1.3, 1.75], [2.2, 2.65]], suction: false });
     catchSurface('floor');
     end = lead + gap + recovery;
-    drive(end);
+    recoveryRun(lead + gap);
     support('floor', 0, lead);
     support('floor', lead + gap, end);
   } else if (kind === 'hurdle') {
@@ -133,62 +186,65 @@ function blueprint(kind: ScenarioKind, seed: number, difficulty: number, entry: 
     // so each one is cleared with a short lift pulse. Count and height rise with difficulty.
     const count = P.hurdleCount.min + Math.round(difficulty * (P.hurdleCount.max - P.hurdleCount.min));
     const height = P.hurdleHeight.min + difficulty * (P.hurdleHeight.max - P.hurdleHeight.min);
+    // Spacing is tuned for the easiest run-up; shorter run-ups bring barriers closer together.
+    const spacing = m(P.hurdleSpacing) - (P.reactionSeconds - timing.reaction) * pace.max;
     let launch = leadAfter(0);
     for (let i = 0; i < count; i++) {
-      if (i > 0) launch += P.hurdleSpacing;
-      drive(launch);
+      if (i > 0) launch += spacing;
+      if (i === 0) leadIn(launch);
+      else { drive(launch - spacing + m(P.hurdleLanding)); floorRun(launch - spacing + m(P.hurdleLanding), launch); }
       phases.push({ action: 'flight', label: 'jump barrier', duration: P.hurdleLiftSeconds, pulses: [[0, P.hurdleLiftSeconds]], suction: false });
       catchSurface('floor');
-      obstacles.push({ id: i + 1, x: 0, y: height / 2, d: launch + P.hurdleOffset,
+      obstacles.push({ id: i + 1, x: 0, y: height / 2, d: launch + m(P.hurdleOffset),
         half: { x: CONFIG.corridor.halfWidth, y: height / 2, z: P.hurdleHalfLength } });
     }
-    end = launch + P.hurdleLanding + recovery;
-    drive(end);
+    end = launch + m(P.hurdleLanding) + recovery;
+    recoveryRun(launch + m(P.hurdleLanding));
     support('floor', 0, end);
   } else if (kind === 'ceiling' || kind === 'multiple') {
-    const lead = leadAfter(P.ceilingLaunchLead);
+    const lead = leadAfter(m(P.ceilingLaunchLead));
     const ceilingEnd = lead + traversal;
     // Mirrored per seed, so the ceiling hands over to either wall.
     const side: SurfaceType = rng.chance(0.5) ? 'left' : 'right';
     const sign = side === 'left' ? -1 : 1;
-    drive(lead - P.ceilingLaunchLead);
+    leadIn(lead - m(P.ceilingLaunchLead));
     phases.push({ action: 'launch', label: 'launch toward ceiling', duration: P.ceilingLiftSeconds, suction: false });
     roll(Math.PI);
     catchSurface('ceiling');
     required.push('ceiling');
     support('floor', 0, lead);
-    support('ceiling', lead - P.supportOverlap, ceilingEnd + 40);
+    support('ceiling', lead - m(P.supportOverlap), ceilingEnd + m(40));
     // A multiple drops toward its wall's side, then a floor leg cools suction before the wall.
     drive(ceilingEnd, 'ceiling', kind === 'multiple' ? sign * setupX : 0);
     roll(0);
     catchSurface('floor');
     if (kind === 'ceiling') {
-      end = ceilingEnd + 40 + recovery;
-      drive(end);
-      support('floor', ceilingEnd - 20, end);
+      end = ceilingEnd + m(40) + recovery;
+      recoveryRun(ceilingEnd + m(40));
+      support('floor', ceilingEnd - m(20), end);
     } else {
-      const wallLead = ceilingEnd + P.multipleFloorLeg;
-      support('floor', ceilingEnd - 20, wallLead);
+      const wallLead = ceilingEnd + m(P.multipleFloorLeg);
+      support('floor', ceilingEnd - m(20), wallLead);
       const wallEnd = wallCrossing(side, wallLead);
-      end = wallEnd + P.wallDropPad + recovery;
-      drive(end);
-      support('floor', wallEnd - 20, end);
+      end = wallEnd + m(P.wallDropPad) + recovery;
+      recoveryRun(wallEnd + m(P.wallDropPad));
+      support('floor', wallEnd - m(20), end);
     }
   } else {
     const side = kind === 'wall-left' ? 'left' : 'right';
     // Sideways setup is a maneuver too: it starts after the reaction interval and entry fuel cell.
     const setupFrom = Math.max(settled, P.pickupInset + 4);
-    const lead = Math.max(baseLead, Math.ceil(setupFrom + P.wallSetupLead));
-    drive(setupFrom);
+    const lead = Math.max(baseLead, Math.ceil(setupFrom + m(P.wallSetupLead)));
+    leadIn(setupFrom);
     support('floor', 0, lead);
     const wallEnd = wallCrossing(side, lead);
-    end = wallEnd + P.wallDropPad + recovery;
-    drive(end);
-    support('floor', wallEnd - 20, end);
+    end = wallEnd + m(P.wallDropPad) + recovery;
+    recoveryRun(wallEnd + m(P.wallDropPad));
+    support('floor', wallEnd - m(20), end);
   }
   // One swept pickup per chunk, collected before its first maneuver, in validation and live play.
   const pickups: PickupLike[] = [{ id: 1, x: 0, y: 0.8, d: P.pickupInset, surface: 'floor' }];
-  return { phases, supports, pickups, obstacles, end, required };
+  return { phases, supports, pickups, obstacles, end, required, pace, timing };
 }
 
 function readState(sim: Simulation, boundary: number, lastArrival: number): ReachableState {
@@ -213,6 +269,8 @@ function makeReplay(entry: ReachableState, b: Blueprint): Simulation {
   sim.vehicle.suctionOverheated = entry.overheated;
   sim.vehicle.suctionOn = entry.suctionOn;
   sim.vehicle.forwardSpeed = entry.forward;
+  sim.vehicle.cruiseSpeed = b.pace.cruise;
+  sim.vehicle.maxSpeed = b.pace.max;
   return sim;
 }
 function steer(sim: Simulation, phase: ManeuverPhase, c: ControlState) {
@@ -275,7 +333,7 @@ function replay(entry: ReachableState, b: Blueprint, tape?: ControlState[], timi
       }
       // The long recovery road permits an ordinary visible steering correction after a
       // timing error; validation never changes the live vehicle or injects resources.
-      if (tape && sim.distance > b.end - CONFIG.car.maxForwardSpeed * P.recoverySeconds + 32 && sim.vehicle.supportSurface === 'floor') {
+      if (tape && sim.distance > b.end - b.pace.max * b.timing.recovery / 2 && sim.vehicle.supportSurface === 'floor') {
         c.steerLeft = false; c.steerRight = false;
         steer(sim, { action: 'drive', label: 'recovery', x: 0 }, c);
         c.suction = false;
@@ -283,9 +341,9 @@ function replay(entry: ReachableState, b: Blueprint, tape?: ControlState[], timi
       const newPhase = recordedPhases.length === 0 || recordedPhases[recordedPhases.length - 1] !== phase;
       if (newPhase && (active.action === 'launch' || active.action === 'flight' ||
         (active.action === 'roll' && b.phases[Math.max(0, phase - 1)].action === 'drive'))) {
-        const reaction = (sim.distance - lastArrival) / CONFIG.car.maxForwardSpeed;
+        const reaction = (sim.distance - lastArrival) / b.pace.max;
         minReactionSeconds = Math.min(minReactionSeconds, reaction);
-        if (reaction < P.reactionSeconds) { reasons.push('insufficient human reaction interval'); break; }
+        if (reaction < b.timing.reaction) { reasons.push('insufficient human reaction interval'); break; }
         if (sim.fuel.value < P.launchFuelReserve) { reasons.push('insufficient launch fuel reserve'); break; }
       }
       controls.push(c); recordedPhases.push(phase);
@@ -311,7 +369,7 @@ function replay(entry: ReachableState, b: Blueprint, tape?: ControlState[], timi
     if (exit.fuel < P.exitFuelReserve) reasons.push('insufficient exit fuel reserve');
     if (exit.heat >= CONFIG.suction.recoveryHeat || exit.overheated || exit.suctionOn) reasons.push('exit lacks suction recovery');
     if (sim.refuelCount < 1) reasons.push('recharge opportunity was not reachable');
-    return { exit, controls, phaseIndices: recordedPhases, samples, reasons, steps, seconds: sim.time, minFuel, maxHeat, minReactionSeconds: Number.isFinite(minReactionSeconds) ? minReactionSeconds : P.reactionSeconds, visited: [...visited] };
+    return { exit, controls, phaseIndices: recordedPhases, samples, reasons, steps, seconds: sim.time, minFuel, maxHeat, minReactionSeconds: Number.isFinite(minReactionSeconds) ? minReactionSeconds : b.timing.reaction, visited: [...visited] };
   } finally { sim.dispose(); }
 }
 
@@ -336,6 +394,8 @@ function candidateBlueprint(candidate: PlannedChunk): Blueprint {
     pickups: candidate.pickups.map(p => ({ ...p, d: p.d - candidate.d0 })),
     obstacles: candidate.obstacles.map(o => ({ ...o, d: o.d - candidate.d0 })),
     end: candidate.d1 - candidate.d0,
+    pace: candidate.pace,
+    timing: chunkTiming(candidate.difficulty),
     // Every planned attachment is a required traversal; decorative islands are not.
     required: [...new Set<SurfaceType>(['floor', ...candidate.plan.flatMap(p => p.action === 'catch' && p.surface ? [p.surface] : [])])],
   };
@@ -347,6 +407,8 @@ export function validatePlan(candidate: PlannedChunk, entry: ReachableState = ca
   const nominal = replay(entry, b, candidate.witness.controls, 0, candidate.witness.phaseIndices);
   const reasons = [...nominal.reasons];
   let replayCount = 1, steps = nominal.steps, minFuel = nominal.minFuel, maxHeat = nominal.maxHeat, minReactionSeconds = nominal.minReactionSeconds;
+  // Entry speeds span the slower previous chunk's cruise up to this chunk's top speed.
+  const { cruise, max } = candidate.pace;
   const check = (result: ReplayResult, label: string) => {
     replayCount++; steps += result.steps;
     minFuel = Math.min(minFuel, result.minFuel); maxHeat = Math.max(maxHeat, result.maxHeat);
@@ -362,12 +424,12 @@ export function validatePlan(candidate: PlannedChunk, entry: ReachableState = ca
     }
     // A new finite witness is constructed for each measured entry speed. Every replay uses
     // exactly the same physical geometry, fuel, heat and inherited transverse state.
-    for (const forward of [CONFIG.car.cruiseSpeed, 28, CONFIG.car.maxForwardSpeed]) {
+    for (const forward of [cruise, (cruise + max) / 2, max]) {
       if (Math.abs(forward - entry.forward) > 0.1) check(replay({ ...entry, forward }, b), `entry speed ${forward}`);
     }
   }
   return { accepted: reasons.length === 0, reasons, seconds: nominal.seconds, steps, minFuel, maxHeat,
-    timingTolerance: P.timingTolerance, replayCount, visitedSurfaces: nominal.visited, minReactionSeconds, entrySpeedEnvelope: { min: CONFIG.car.cruiseSpeed, max: CONFIG.car.maxForwardSpeed } };
+    timingTolerance: P.timingTolerance, replayCount, visitedSurfaces: nominal.visited, minReactionSeconds, entrySpeedEnvelope: { min: Math.min(cruise, entry.forward), max } };
 }
 
 /** Recompute the nominal exit and witness after geometry changes, then repeat every safety replay. */
@@ -386,15 +448,16 @@ export function recertifyPlan(candidate: PlannedChunk): PlannedChunk {
 export function planChunk(options: PlanChunkOptions): PlannedChunk {
   const { id, seed, d0, kind, entry } = options;
   const difficulty = clamp(options.difficulty, 0, 1);
-  const b = blueprint(kind, seed, difficulty, entry, options.intro);
+  const pace = options.pace ?? paceFor(difficulty);
+  const b = blueprint(kind, seed, difficulty, entry, pace, options.intro);
   const nominal = replay(entry, b);
   const samples = nominal.samples.map(p => ({ ...p, d: p.d + d0 }));
   const candidate: PlannedChunk = {
-    id, seed, d0, d1: d0 + b.end, kind, difficulty, entry: { ...entry }, exit: nominal.exit,
+    id, seed, d0, d1: d0 + b.end, kind, difficulty, pace, entry: { ...entry }, exit: nominal.exit,
     slabs: b.supports.map(s => ({ ...s, d0: s.d0 + d0, d1: s.d1 + d0 })),
     pickups: b.pickups.map(p => ({ ...p, d: p.d + d0 })), obstacles: b.obstacles.map(o => ({ ...o, d: o.d + d0 })), route: samples, plan: b.phases,
     validation: { accepted: nominal.reasons.length === 0, reasons: nominal.reasons, seconds: nominal.seconds, steps: nominal.steps,
-      minFuel: nominal.minFuel, maxHeat: nominal.maxHeat, timingTolerance: P.timingTolerance, replayCount: 1, visitedSurfaces: nominal.visited, minReactionSeconds: nominal.minReactionSeconds, entrySpeedEnvelope: { min: CONFIG.car.cruiseSpeed, max: CONFIG.car.maxForwardSpeed } },
+      minFuel: nominal.minFuel, maxHeat: nominal.maxHeat, timingTolerance: P.timingTolerance, replayCount: 1, visitedSurfaces: nominal.visited, minReactionSeconds: nominal.minReactionSeconds, entrySpeedEnvelope: { min: Math.min(pace.cruise, entry.forward), max: pace.max } },
     witness: { dt: 1 / CONFIG.physicsHz, controls: nominal.controls, samples, phaseIndices: nominal.phaseIndices },
   };
   if (candidate.validation.accepted) candidate.validation = validatePlan(candidate);

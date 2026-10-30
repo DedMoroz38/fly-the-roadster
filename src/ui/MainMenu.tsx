@@ -1,24 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
 import { MenuScene } from '../render/menuScene';
+import { vehicleById } from '../render/vehicles';
 
 export interface MainMenuProps {
   onStart: () => void;
   seed?: number;
+  vehicleId: string;
+  /** Moves the selection by ±1 through the vehicle list. */
+  onCycleVehicle: (step: number) => void;
 }
 
 /** Space is handled by Game; this button supplies pointer and native Enter activation. */
-export function MainMenu({ onStart, seed }: MainMenuProps) {
+export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle }: MainMenuProps) {
   const preview = useRef<HTMLSpanElement>(null);
+  const scene = useRef<MenuScene | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
   useEffect(() => {
     if (!preview.current) return;
     try {
-      const scene = new MenuScene(preview.current);
-      return () => scene.dispose();
+      const menuScene = new MenuScene(preview.current, vehicleId);
+      scene.current = menuScene;
+      return () => { menuScene.dispose(); scene.current = null; };
     } catch {
       setPreviewFailed(true);
     }
+    // The showroom is built once; vehicle changes are applied below without rebuilding it.
   }, []);
+  useEffect(() => { scene.current?.setVehicle(vehicleId); }, [vehicleId]);
+  const vehicle = vehicleById(vehicleId);
 
   return (
     <main className="main-menu" aria-labelledby="main-menu-title">
@@ -39,13 +48,24 @@ export function MainMenu({ onStart, seed }: MainMenuProps) {
             {previewFailed && <span className="main-menu__preview-fallback">Your roadster is ready.</span>}
           </span>
           <span className="main-menu__start"><kbd>SPACE</kbd><span>TO DRIVE</span><span className="main-menu__arrow" aria-hidden="true">↗</span></span>
-          <span className="main-menu__click-hint">or click the roadster</span>
+          <span className="main-menu__click-hint">or click the {vehicle.name}</span>
         </button>
+
+        <div className="main-menu__garage" role="group" aria-label="Choose your vehicle">
+          <button type="button" className="main-menu__pick" onClick={() => onCycleVehicle(-1)} aria-label="Previous vehicle">‹</button>
+          <span className="main-menu__vehicle" aria-live="polite">{vehicle.name}</span>
+          <button type="button" className="main-menu__pick" onClick={() => onCycleVehicle(1)} aria-label="Next vehicle">›</button>
+        </div>
+        <p className="main-menu__credit">
+          {vehicle.credit
+            ? <>Model: <a href={vehicle.credit.url} target="_blank" rel="noopener noreferrer">“{vehicle.credit.title}”</a> by {vehicle.credit.author} · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a></>
+            : <>&nbsp;</>}
+        </p>
 
         <div className="main-menu__controls" aria-label="Driving controls">
           <span><kbd>SPACE</kbd> Lift</span>
-          <span><kbd>← →</kbd> Roll</span>
-          <span><kbd>HOLD E</kbd> Suction</span>
+          <span><kbd>← →</kbd> Roll · pick vehicle here</span>
+          <span><kbd>HOLD SHIFT</kbd> Suction</span>
           <span><kbd>A D</kbd> Steer</span>
         </div>
       </div>

@@ -122,21 +122,21 @@ describe('InputManager', () => {
   });
   it('suction remains held across snapshots and repeat events until release', () => {
     const im = new InputManager();
-    im.keyDown('KeyE');
+    im.keyDown('ShiftLeft');
     expect(im.sample().suction).toBe(true);
     expect(im.sample().suction).toBe(true);
-    im.keyDown('KeyE', true);
+    im.keyDown('ShiftLeft', true);
     expect(im.sample().suction).toBe(true);
-    im.keyUp('KeyE');
+    im.keyUp('ShiftLeft');
     expect(im.sample().suction).toBe(false);
-    im.keyDown('KeyE');
+    im.keyDown('ShiftLeft');
     expect(im.sample().suction).toBe(true);
   });
   it('releases held suction on window blur', () => {
     const im = new InputManager();
     const target = new EventTarget();
     const detach = im.attach(target as unknown as Window);
-    im.keyDown('KeyE');
+    im.keyDown('ShiftLeft');
     expect(im.sample().suction).toBe(true);
     target.dispatchEvent(new Event('blur'));
     expect(im.sample().suction).toBe(false);
@@ -144,14 +144,14 @@ describe('InputManager', () => {
   });
   it('blocks held start/menu keys until release, including repeat keydown', () => {
     const im = new InputManager();
-    for (const key of ['Space', 'KeyW', 'KeyE']) im.keyDown(key);
+    for (const key of ['Space', 'KeyW', 'ShiftLeft']) im.keyDown(key);
     im.clearUntilRelease();
-    for (const key of ['Space', 'KeyW', 'KeyE']) im.keyDown(key, true);
+    for (const key of ['Space', 'KeyW', 'ShiftLeft']) im.keyDown(key, true);
     expect(im.sample().thrust).toBe(false);
     expect(im.sample().accelerate).toBe(false);
     expect(im.sample().suction).toBe(false);
     expect(im.consumePress('thrust')).toBe(false);
-    for (const key of ['Space', 'KeyW', 'KeyE']) {
+    for (const key of ['Space', 'KeyW', 'ShiftLeft']) {
       im.keyUp(key);
       im.keyDown(key);
     }
@@ -167,7 +167,7 @@ describe('InputManager', () => {
   it('clear releases held keys', () => {
     const im = new InputManager();
     im.keyDown('KeyW');
-    im.keyDown('KeyE');
+    im.keyDown('ShiftLeft');
     im.clear();
     expect(im.sample().accelerate).toBe(false);
     expect(im.sample().suction).toBe(false);

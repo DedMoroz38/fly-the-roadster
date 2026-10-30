@@ -4,3 +4,5 @@ dist
 .playwright-mcp
 docs
 *.log
+# Source model; the game ships the light bake (tesla_roadster_2026.lite.glb)
+models/tesla_roadtser_2026.glb

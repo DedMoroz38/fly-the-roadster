@@ -284,6 +284,95 @@ moved from 2 to 1 per chunk. New tests: flip counting and combo points, payout a
 and no payout for a partial roll or a roof landing.
 Full run: **218 tests / 24 suites pass**; `npm run build` passes and bundles the model.
 
+## 14. Speed rises with difficulty, difficulty you can feel, suction on Shift — DONE
+
+- [x] Cruise speed scales with difficulty (24 → 36 m/s; W keeps its +8 m/s margin).
+- [x] Difficulty drives more of the course, and its curve keeps rising after the first kilometre.
+- [x] Suction moved from E to Shift (either side).
+
+Why difficulty was not felt: it only changed the chunk-type mix, gap/flight length (+6–8 m) and
+barrier count/height, and the old curve flattened after 1 km (0.78 at 1 km, 0.87 at 10 km).
+
+Pace: `paceFor(difficulty)` gives a chunk's cruise and top speed. The planner validates the chunk at
+that pace, `Course.paceAt` reports it, and `Simulation` sets the vehicle targets each step, so live
+play matches validation. Planner distances (leads, traversals, gaps, legs, hurdle spacing, slalom
+segments, reaction margin) scale with the chunk's top speed relative to the base 32 m/s, so maneuver
+timing, reaction intervals and heat windows stay the same in seconds. Entry-speed replays now
+cover the chunk's cruise, midpoint and top speed. A fallback road keeps the requested pace.
+
+Difficulty: `1 − exp(−√(d / 670))`, about 0.42 at 200 m (as before), 0.70 at 1 km, 0.93 at 5 km.
+It also tightens slalom lane changes (up to 30%) and raises hazard density (floor 4 → 9 per chunk,
+surfaces 2 → 4; spacing about a third shorter, scaled with speed). Every chunk family validates at
+difficulty 1 (36/44 m/s). Seeds 1/42/233 over 5 km: no fallbacks. Seed 42 cruise ramps from
+86 km/h to 116 km/h by 900 m and 127 km/h by 5 km.
+
+Test changes, with reasons: curve tests assert the new targets and continued growth (strict growth
+checked to 100 km; beyond that the curve is 1 to double precision); the flight-gap bound and seam
+tolerance scale with chunk speed; the consecutive-witness test gives its static level each chunk's
+pace, as the live course does (`StaticLevel.paceAt`); the obstacle bound counts hurdles and the
+hardest hazard limits; input tests use Shift. New test: pace grows along a course, the course reports
+it, and the car settles at the level's pace.
+Full run: **219 tests / 24 suites pass**; `npm run build` passes. Browser: holding Shift attaches
+suction and releasing it turns suction off, E does nothing, and cruise went from 86 to 101 km/h at
+the first challenge.
+
+## 15. No more easy stretches at high difficulty — DONE
+
+- [x] Forced floor runs stop at difficulty 0.8; the optional easy-section chance fades to zero.
+- [x] Run-up 2 → 1.2 s and recovery 2 → 1.4 s as difficulty rises (≥ 1.7 s after surfaces).
+- [x] Floor stretches weave (run-ups, recovery, between barriers); every run-up fits a lane change.
+- [x] Low full-width barriers (0.8–1.2 m, up to 2) inside floor runs.
+- [x] Gates: wall-to-wall boxes with one opening at the route's lane (0 → 3 per chunk).
+
+Cause (seed 2804205951, the reported screenshot at ~1.5 km): a forced every-5th floor run whose final
+straight had only small side-lane boxes. Plain floor was 55% of route time. Run-ups and recovery
+were straight because they were shorter than one lane change plus a return to the centre.
+
+`chunkTiming(difficulty)` sets each chunk's reaction and recovery seconds; the planner and every
+replay use it. `floorRun` fits lane changes individually and keeps the lane before floor launches
+(gaps/flights recentre, since their landing must end centred). Barrier spacing shrinks with the
+run-up. Gates take each opening from the route's own position, preferring off-centre openings, and
+pass the same route-protection check as other boxes. Decoration is retried without gates before
+falling back to the undecorated chunk.
+
+Results: all families validate at difficulties 0.2 and 1 on seeds 123/217/5. Seeds 1/42/233 over
+5 km: no fallbacks, ~1.5 s generation per km in Node. Plain floor fell to 42–47% of route time
+(seeds 1/42/233/2804205951, 4 km), with ~20 gates and 3–8 barriers per 4 km.
+
+Test changes, with reasons: reaction assertions use the chunk's own interval, and the "first
+action" check excludes steering because run-ups now weave; the breather assertion only applies
+below the cut-off. New `tests/difficulty.test.ts`: breathers stop past the cut-off, timing shrinks
+and is certified, run-ups weave, barriers appear in hard floor runs within limits, and gates open
+where the route passes.
+Full run: **224 tests / 25 suites pass**; `npm run build` passes; the production build loads and
+plays in the browser.
+
+## 16. Selectable vehicles — DONE
+
+- [x] All six models selectable on the main menu (‹ › buttons or ← →), remembered per browser.
+- [x] Tesla Roadster reduced from 28.6 MB / 500k triangles to 0.48 MB / 40k triangles.
+- [x] CC BY 4.0 credits shown in the menu for each Sketchfab model.
+
+Roadster: a scan whose colour sits in an emissive texture, with a texture seam at nearly every
+triangle, so standard simplification stalled at ~250k triangles. `scripts/bake-vertex-colors.mjs`
+samples the texture into vertex colours, keeps the unlit look (`KHR_materials_unlit`), welds by
+position, simplifies with meshoptimizer and quantizes (`KHR_mesh_quantization`); three.js loads both
+extensions without extra decoders. The original stays in `models/` but is not bundled and is
+excluded from the Docker build context.
+
+Per-model fixes found by viewing each in game from the chase camera: Steve faces +Z already
+(yaw 0) and ships with 144 water tiles that made the boat tiny, now stripped at load; the dino is a
+flat side-on sprite turned to face forward (from behind it reads as a thin strip; the menu turntable
+shows it fully). Models are fitted by length and capped at 1.6 m tall and 2.1 m wide; the underglow
+strips tuck inside narrow bodies. The dino's walk animation plays (faster with speed); wheels spin
+only where a model has wheel nodes (the Fast Charger).
+
+Tests: catalogue ids, bundled files and credits; the light Roadster is the shipped file; selection
+memory with missing, stale or blocked storage; swapping a CarModel's vehicle.
+Full run: **227 tests / 26 suites pass**; `npm run build` passes and bundles six models (about 2 MB
+in total, each loaded on first selection). Browser: arrow keys cycle through all six with matching
+names and credits, and each was checked in game.
+
 ## Evidence / issues
 
 - Baseline environment had no `npm` on PATH; resolved with the verified local Node 22 distribution.

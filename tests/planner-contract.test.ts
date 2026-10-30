@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { CONFIG } from '../src/game/config';
 import {
-  initialReachableState, planChunk, validatePlan,
+  chunkTiming, initialReachableState, planChunk, validatePlan,
   type PlannedChunk, type ScenarioKind,
 } from '../src/game/course/planner';
 import { PLANNER_CONFIG } from '../src/game/course/plannerConfig';
@@ -33,8 +33,9 @@ describe('constructive route contracts', () => {
         plan.validation.replayCount * Math.ceil(PLANNER_CONFIG.maxValidationSeconds * CONFIG.physicsHz),
       );
       expect(plan.validation.timingTolerance).toBeGreaterThanOrEqual(0.15);
-      const firstAction = plan.witness.controls.findIndex(c => c.thrust || c.rollLeft || c.rollRight || c.steerLeft || c.steerRight || c.suction);
-      if (kind !== 'normal') expect(firstAction * plan.witness.dt).toBeGreaterThanOrEqual(PLANNER_CONFIG.reactionSeconds);
+      // Run-ups may weave (steering); the first lift, roll or suction waits for the chunk's run-up time.
+      const firstAction = plan.witness.controls.findIndex(c => c.thrust || c.rollLeft || c.rollRight || c.suction);
+      if (kind !== 'normal') expect(firstAction * plan.witness.dt).toBeGreaterThanOrEqual(chunkTiming(plan.difficulty).reaction);
       const multipleWall = plan.plan.find(p => p.action === 'catch' && (p.surface === 'left' || p.surface === 'right'))?.surface;
       const required = kind === 'multiple' ? ['floor', 'ceiling', multipleWall!]
         : kind === 'wall-left' ? ['floor', 'left']
@@ -61,8 +62,10 @@ describe('constructive route contracts', () => {
     const floors = flight.slabs.filter(s => s.surface === 'floor').sort((a, b) => a.d0 - b.d0);
     expect(floors).toHaveLength(2);
     const gapStart = floors[0].d1, gapEnd = floors[1].d0;
-    expect(gapEnd - gapStart).toBeGreaterThanOrEqual(PLANNER_CONFIG.flightMin);
-    expect(gapEnd - gapStart).toBeLessThanOrEqual(PLANNER_CONFIG.flightMax);
+    // Gap lengths are tuned at base top speed and scale with the chunk's speed.
+    const scale = flight.pace.max / CONFIG.car.maxForwardSpeed;
+    expect(gapEnd - gapStart).toBeGreaterThanOrEqual(PLANNER_CONFIG.flightMin * scale - 1e-9);
+    expect(gapEnd - gapStart).toBeLessThanOrEqual(PLANNER_CONFIG.flightMax * scale + 1e-9);
     expect(flight.slabs.some(s => s.d0 < gapEnd && s.d1 > gapStart)).toBe(false);
     expect(flight.route.some(p => p.d > gapStart + CONFIG.car.halfExtents.z && p.d < gapEnd - CONFIG.car.halfExtents.z && p.surface === null)).toBe(true);
   });
@@ -110,8 +113,11 @@ describe('constructive route contracts', () => {
     const first = candidates.get('multiple')!;
     const second = planChunk({ id: 8, seed: 1008, kind: 'wall-right', difficulty: 1, d0: first.d1, entry: first.exit });
     expect(second.validation.reasons).toEqual([]);
-    const sim = new Simulation({ createLevel: world => new StaticLevel(world,
-      [...first.slabs, ...second.slabs], [...first.pickups, ...second.pickups]) });
+    const sim = new Simulation({ createLevel: world => {
+      const level = new StaticLevel(world, [...first.slabs, ...second.slabs], [...first.pickups, ...second.pickups]);
+      level.paceAt = distance => distance < first.d1 ? first.pace : second.pace;
+      return level;
+    } });
     const monitor = new FailureMonitor();
     try {
       for (const control of first.witness.controls) {
@@ -122,7 +128,7 @@ describe('constructive route contracts', () => {
       // produce slightly different contact integration. Measured drift across kinds and
       // seeds reaches ~0.95 m, so both boundaries must stay within two physics steps
       // (~33 ms), well inside the certified ±150 ms action-timing margin.
-      const seamTolerance = 2 * CONFIG.car.maxForwardSpeed / CONFIG.physicsHz;
+      const seamTolerance = 2 * first.pace.max / CONFIG.physicsHz;
       expect(Math.abs(sim.distance - first.d1 - second.entry.distanceOffset)).toBeLessThan(seamTolerance);
       expect(sim.vehicle.body.linvel().x).toBeCloseTo(second.entry.vx, 3);
       // The next floor collider already exists here, so contact solving at the

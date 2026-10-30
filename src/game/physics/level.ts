@@ -186,6 +186,8 @@ export interface Level {
   /** Optional fuel pickups currently in play. */
   readonly activePickups?: Map<number, PickupLike>;
   collect?(id: number): boolean;
+  /** Optional cruise/boost speed targets (m/s) at a forward distance. */
+  paceAt?(distance: number): { cruise: number; max: number } | undefined;
 }
 
 /** Fixed list of slabs (and optional pickups); used by tests and debugging. */
@@ -193,6 +195,8 @@ export class StaticLevel implements Level {
   readonly slabs: SlabSet;
   readonly obstacles: ObstacleSet;
   readonly activePickups = new Map<number, PickupLike>();
+  /** Set when replaying course chunks, so the car keeps each chunk's validated speed. */
+  paceAt?: (distance: number) => { cruise: number; max: number } | undefined;
   constructor(world: RAPIER.World, slabs: Omit<Slab, 'id'>[], pickups: Omit<PickupLike, 'id'>[] = [], obstacles: ObstacleLike[] = [], originDistance = 0) {
     this.slabs = new SlabSet(world);
     this.obstacles = new ObstacleSet(world);

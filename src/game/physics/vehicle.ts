@@ -50,6 +50,9 @@ export class Vehicle {
   /** Effective held-E suction output after thermal and energy limits. */
   suctionOn = false;
   suctionHeat = 0;
+  /** Current pace targets; a course raises them with difficulty. */
+  cruiseSpeed: number = CONFIG.car.cruiseSpeed;
+  maxSpeed: number = CONFIG.car.maxForwardSpeed;
   suctionOverheated = false;
   suctionState: SuctionState = 'off';
   /** True on the step where a suction attachment was newly made (for effects). */
@@ -183,8 +186,8 @@ export class Vehicle {
     // Automatic cruise remains free in every movement mode. Fund only the extra
     // acceleration toward W's higher target, sharing partial final fuel with other systems.
     // Exhaustion or release returns gently toward cruise without rewriting momentum.
-    const cruiseDrive = clamp((car.cruiseSpeed + v.z) * car.driveGain, -car.coastDecel, car.acceleration);
-    const boostedDrive = clamp((car.maxForwardSpeed + v.z) * car.driveGain, -car.coastDecel, car.acceleration);
+    const cruiseDrive = clamp((this.cruiseSpeed + v.z) * car.driveGain, -car.coastDecel, car.acceleration);
+    const boostedDrive = clamp((this.maxSpeed + v.z) * car.driveGain, -car.coastDecel, car.acceleration);
     const boostPower = c.accelerate ? power : 0;
     const boostDrive = (boostedDrive - cruiseDrive) * boostPower;
     acceleration.z = -(cruiseDrive + boostDrive);

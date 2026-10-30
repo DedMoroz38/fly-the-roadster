@@ -1,22 +1,19 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import carUrl from '../../models/car.glb?url';
 import { CONFIG } from '../game/config';
+import { getSelectedVehicle, loadVehicle, vehicleById, type LoadedVehicle } from './vehicles';
 
-let carBody: Promise<THREE.Object3D> | null = null;
-
-/** Loads the car mesh once; every CarModel clones it. Await before building views to avoid pop-in. */
-export function loadCarBody(): Promise<THREE.Object3D> {
-  carBody ??= new GLTFLoader().loadAsync(carUrl).then(gltf => gltf.scene);
-  return carBody;
-}
+/** Largest visual height and width (m) a model may take after fitting its length to the collider. */
+const FIT_LIMITS = { height: 1.6, width: 2.1 } as const;
 
 /**
- * Roadster built from models/car.glb, scaled to the physics box. Local frame: -Z forward,
- * +Y up (wheels at -Y). Exposes setters for effects (thrusters, suction) so the renderer can drive them.
+ * The selected vehicle model, fitted to the physics box. Local frame: -Z forward, +Y up (wheels at
+ * -Y). Exposes setters for effects (thrusters, suction) so the renderer can drive them.
  */
 export class CarModel {
   readonly group = new THREE.Group();
+  vehicleId: string;
+  private body: THREE.Object3D | null = null;
+  private mixer: THREE.AnimationMixer | null = null;
   private wheels: THREE.Object3D[] = [];
   private wheelRadius = 0.3;
   private liftFlames: THREE.Mesh[] = [];
@@ -30,6 +27,7 @@ export class CarModel {
   private suctionRing: THREE.Mesh;
   private suctionMat: THREE.MeshBasicMaterial;
   private accentMat: THREE.MeshStandardMaterial;
+  private underglow: THREE.Mesh[] = [];
   private flameMat: THREE.MeshBasicMaterial;
   private time = 0;
   private attachFlash = 0;
@@ -37,10 +35,10 @@ export class CarModel {
   private beamMat: THREE.MeshBasicMaterial;
   private thrustLight: THREE.PointLight;
 
-  constructor() {
+  constructor(vehicleId = getSelectedVehicle()) {
     const he = CONFIG.car.halfExtents;
-    // Headless tests have no loader environment; they exercise the effects only.
-    if (typeof document !== 'undefined') loadCarBody().then(body => this.attachBody(body), error => console.error('Car model failed to load', error));
+    this.vehicleId = vehicleId;
+    this.setVehicle(vehicleId);
 
     // Neon underglow strips; they switch to violet while suction is held.
     this.accentMat = new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00e5ff, emissiveIntensity: 1.6 });
@@ -48,6 +46,7 @@ export class CarModel {
       const strip = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 2.2), this.accentMat);
       strip.position.set(side * (he.x - 0.25), -he.y + 0.12, 0);
       this.group.add(strip);
+      this.underglow.push(strip);
     }
 
     // Thruster flames: lift (under the belly, pointing away from the roof) and rear.
@@ -204,28 +203,63 @@ export class CarModel {
   update(dt: number, forwardSpeed: number) {
     this.time += dt;
     this.attachFlash = Math.max(0, this.attachFlash - dt * 3);
-    // The model faces +Z inside its turned-around root, so forward travel spins its wheels positively.
+    // Models face +Z inside their turned-around root, so forward travel spins their wheels positively.
     for (const w of this.wheels) w.rotation.x += (forwardSpeed / this.wheelRadius) * dt;
+    // Built-in animations (the dino's walk) play faster with speed, and idle on the menu turntable.
+    this.mixer?.update(dt * Math.max(1, forwardSpeed / CONFIG.car.cruiseSpeed));
   }
 
-  /** Fits the model's length to the collider, centres it and rests the wheels on the collider floor. */
-  private attachBody(template: THREE.Object3D) {
+  /** Swaps the visible body; the physics body is the same for every vehicle. */
+  setVehicle(id: string) {
+    this.vehicleId = vehicleById(id).id;
+    // Headless tests have no loader environment; they exercise the effects only.
+    if (typeof document === 'undefined') return;
+    const requested = this.vehicleId;
+    loadVehicle(requested).then(
+      vehicle => { if (this.vehicleId === requested) this.attachBody(vehicle); },
+      error => console.error(`Vehicle ${requested} failed to load`, error),
+    );
+  }
+
+  /**
+   * Turns the model to face forward, fits its length to the collider (capped so tall or wide models
+   * stay inside the corridor's feel), centres it and rests its lowest point on the collider floor.
+   */
+  private attachBody({ scene, animations }: LoadedVehicle) {
     const he = CONFIG.car.halfExtents;
-    const body = template.clone(true);
-    body.rotation.y = Math.PI;
+    if (this.body) this.group.remove(this.body);
+    this.mixer?.stopAllAction();
+    this.mixer = null;
+    this.wheels = [];
+    const option = vehicleById(this.vehicleId);
+    const body = scene.clone(true);
+    if (option.strip) {
+      const scenery: THREE.Object3D[] = [];
+      body.traverse(o => { if (option.strip!.test(o.name)) scenery.push(o); });
+      for (const o of scenery) o.removeFromParent();
+    }
+    body.rotation.y = option.yaw;
     const root = new THREE.Group();
     root.add(body);
     const box = new THREE.Box3().setFromObject(root);
     const size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
-    const scale = (he.z * 2) / size.z;
+    const scale = Math.min((he.z * 2) / size.z, FIT_LIMITS.height / size.y, FIT_LIMITS.width / size.x);
     root.scale.setScalar(scale);
     root.position.set(-centre.x * scale, -he.y - box.min.y * scale, -centre.z * scale);
+    // Keep the underglow tucked under narrow bodies (a dino, a boat) instead of beside them.
+    const halfWidth = (size.x * scale) / 2;
+    for (const strip of this.underglow) strip.position.x = Math.sign(strip.position.x) * Math.max(0.1, Math.min(he.x - 0.25, halfWidth * 0.6));
     body.traverse(o => {
       if (/wheel/i.test(o.name)) this.wheels.push(o);
       if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).castShadow = false;
     });
     const wheel = this.wheels[0] && new THREE.Box3().setFromObject(this.wheels[0]).getSize(new THREE.Vector3());
     if (wheel) this.wheelRadius = (wheel.y / 2) * scale;
+    if (animations.length) {
+      this.mixer = new THREE.AnimationMixer(body);
+      for (const clip of animations) this.mixer.clipAction(clip).play();
+    }
+    this.body = root;
     this.group.add(root);
   }
 }

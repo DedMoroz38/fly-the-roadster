@@ -29,17 +29,17 @@ keypress is consumed so it cannot also fire the lift thrusters.
 | Space | Main thrusters (push away from the wheels) |
 | ← / → | Roll torque on every surface and in the air |
 | A / D | Steer on a surface |
-| Hold E | Engage suction; release to let go and cool |
+| Hold Shift | Engage suction; release to let go and cool |
 | R | Restart (same seed) |
 | Esc | Pause |
 | H | Help overlay |
 | F3 | Toggle physics telemetry and the intended route |
 
-Cruise is 24 m/s; acceleration approaches 32 m/s. There are no braking or reversing controls.
+Cruise starts at 24 m/s and rises with difficulty to 36 m/s; W adds up to 8 m/s on top. There are no braking or reversing controls.
 Forces and torques drive the dynamic body, including roll against ground contact. Pitch and yaw
 are locked. A/D steer independently on surfaces; the arrows fire the visible roll-thruster pairs.
 
-Floors support the car by gravity. Walls and ceilings need E held for suction with the wheels facing them.
+Floors support the car by gravity. Walls and ceilings need Shift held for suction with the wheels facing them.
 Attraction requires a surface within 3 m; attachment requires a gap of at most 0.4 m and alignment.
 Acceleration, lift, roll and suction share a 2.5-unit tank (2.5 s of lift). W / ↑ consumes 0.4 units/s;
 automatic cruise remains free, including with an empty tank. Each chunk has one green fuel cell near
@@ -48,7 +48,7 @@ Landing on the roof ends the run. Airborne barrel rolls and wheels-first ceiling
 
 Suction heats at 24 units/s on every surface and in the air; floor suction also uses extra fuel and
 adds drag. The HUD warns at 75, locks suction off at 100, and allows reactivation below 35.
-Releasing E cools at 18 units/s. If E stays held through an overheat, suction resumes only after heat
+Releasing Shift cools at 18 units/s. If Shift stays held through an overheat, suction resumes only after heat
 drops below 35 and fuel is available. A held wall or ceiling run therefore lasts about 4 seconds.
 
 ## Score
@@ -58,8 +58,28 @@ when you land safely: 100 × flips², so 1 flip pays 100, 2 pay 400 and 3 pay 90
 short of the last roll still counts. Crashing or landing on the roof forfeits that jump's bonus.
 Tune it in `CONFIG.score`.
 
-The car is `models/car.glb`, scaled to the physics box. It is about 0.3 m taller than the collider,
-so the roof can visually overlap low geometry without touching it.
+## Vehicles
+
+Pick a vehicle on the main menu with ‹ › or ← →; the choice is remembered in this browser. Every
+vehicle uses the same physics body and handling, so only the look changes. Models load on first
+selection, are turned to face forward, and are scaled to the physics body's length (capped at 1.6 m
+tall and 2.1 m wide). Wheels spin where a model has wheel nodes, and the dino's walk plays faster
+with speed. The models are slightly taller than the collider, so a roof can visually overlap low
+geometry without touching it.
+
+| Vehicle | Model | Credit (CC BY 4.0) |
+| --- | --- | --- |
+| Fast Charger | `models/car.glb` | project asset |
+| Tesla Roadster | `models/tesla_roadster_2026.lite.glb` | “Tesla Roadtser 2026” by asiphy007 |
+| Cybertruck | `models/tesla_cybertruck.glb` | “Tesla Cybertruck” by Lexyc16 |
+| DeLorean | `models/delorean_time_machine_-_flying_mode.glb` | “DeLorean Time Machine - Flying Mode” by Sea Land Air |
+| Chrome Dino | `models/3d_chrome_dino_walking.glb` | “3D Chrome Dino Walking” by MayMax |
+| Steve in a Boat | `models/steve_in_a_boat.glb` (water tiles removed at load) | “Steve In A Boat” by CalebChaffee |
+
+The menu shows the credit and Sketchfab link for the selected model. The original Roadster scan
+(28.6 MB, 500k triangles) is not shipped; `scripts/bake-vertex-colors.mjs` bakes its texture into
+vertex colours and simplifies it to the 0.5 MB, 40k-triangle file the game loads. Add a vehicle in
+`src/render/vehicles.ts`.
 
 ## Terrain and validation
 
@@ -77,19 +97,33 @@ obstacles mount on floors, ceilings and both walls, including the opening road. 
 colliders are part of world generation: placement respects the intended route and reaction margins,
 then the complete decorated chunk is replayed and validated again. Unreachable additions are rejected.
 
-Floor runs are slaloms: the certified route
-weaves between lanes and obstacles fill the centre lanes it vacates, so A/D steering is required.
-The 2 s reaction interval is measured from the latest touchdown, carried across chunk boundaries,
-so lead-ins are only as long as that interval needs. Recovery after a maneuver is 2 s at top speed.
-Wall/ceiling traversals are 80–93 m: long enough for the 2 s reaction interval after attaching,
-short enough to finish before suction overheats. On seeds 1/42/233 over 3 km, floor and slalom are
-about 62–66% of route time, surfaces about 20%, and flight about 18%.
-The opening road is 110–130 m and leads into two requested challenge chunks; the first maneuver
-arrives after roughly 6–7.5 seconds. Difficulty ramps quickly: about 42% at 200 m, 63% at 500 m,
-78% at 1 km and 85% at 5 km.
+Floor stretches weave: run-ups, recovery roads, the floor between barrier jumps and floor runs all
+change lanes wherever a lane change fits, and obstacles fill the lanes the route leaves, so A/D
+steering is required. Launches from the floor keep their lane (gaps and long flights recentre first).
+Past the opening, every run-up is long enough for at least one lane change.
 
-The validation contract includes a minimum 2 s preparation interval, ±0.15 s action/suction timing
-checks, and entry speeds of 24/28/32 m/s. Timing variants allow ordinary steering corrections on
+The reaction interval runs from the latest touchdown, carried across chunk boundaries. It and the
+recovery floor after the last maneuver shrink with difficulty: 2 s → 1.2 s and 2 s → 1.4 s
+(at least 1.7 s after a wall or ceiling run, so suction can cool). Wall/ceiling traversals are
+80–93 m at base speed: long enough for the reaction interval after attaching, short enough to finish
+before suction overheats. Every planner distance scales with the chunk's top speed, so maneuvers keep
+the same timing as the car gets faster. On seeds 1/42/233/2804205951 over 4 km, plain floor
+(not weaving, jumping, on a surface or in the air) is about 42–47% of route time, and most of it carries
+gates or obstacles.
+
+The opening road is 110–130 m and leads into two requested challenge chunks. Every 5th chunk is a
+forced floor run until difficulty reaches 0.8 (about 2 km); the 5% chance of an extra one fades to
+zero at difficulty 1. Difficulty is `1 − exp(−√(distance / 670 m))`: about 42% at 200 m, 58% at
+500 m, 70% at 1 km, 82% at 2 km and 93% at 5 km. It sets each chunk's cruise speed (24 → 36 m/s,
+about 86 → 130 km/h), the challenge mix, gap and flight lengths, barrier count and height, slalom
+tightness (lane changes up to 30% closer), low full-width barriers inside floor runs (up to 2,
+0.8–1.2 m tall), gates (0 → 3 per chunk, wall-to-wall boxes with one opening at the route's lane),
+and hazard density (floor 4 → 9 obstacles per chunk, walls/ceilings 2 → 4, spacing down by about
+a third). If a decorated chunk fails validation, it is retried without gates before falling back to
+the undecorated route.
+
+The validation contract includes the chunk's reaction interval, ±0.15 s action/suction timing
+checks, and entry speeds from the chunk's cruise to its top speed. Timing variants allow ordinary steering corrections on
 supported surfaces. Each chunk returns to a stable, centred floor state with recovered suction and
 fuel reserve. These checks establish feasible intended routes within those margins; they do not
 certify arbitrary player inputs, every lift duration, or sustained acceleration through a maneuver.

@@ -29,7 +29,7 @@ describe('constructive seeded course', () => {
         expect(next.d0).toBe(previous.d1);
         expect(next.entry).toEqual(previous.exit);
       }
-      if (i % GENERATOR_CONFIG.recoveryEvery === 0) expect(next.kind).toBe('normal');
+      if (i % GENERATOR_CONFIG.recoveryEvery === 0 && next.difficulty < GENERATOR_CONFIG.recoveryUntil) expect(next.kind).toBe('normal');
     }
   });
 
@@ -78,10 +78,11 @@ describe('constructive seeded course', () => {
     // The opening ramp is steep by design; smoothness is checked from 100 m on.
     let previous = difficultyAt(100);
     expect(previous).toBeGreaterThan(0);
-    for (let distance = 115; distance < 1e7; distance *= 1.15) {
+    // Beyond ~100 km the curve is 1 to double precision, so strict growth is checked up to there.
+    for (let distance = 115; distance < 1e5; distance *= 1.15) {
       const d = difficultyAt(distance);
       expect(d).toBeGreaterThan(previous);
-      expect(d).toBeLessThan(1);
+      expect(d).toBeLessThanOrEqual(1);
       expect(d - previous).toBeLessThan(0.08);
       previous = d;
     }
