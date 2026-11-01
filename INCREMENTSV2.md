@@ -458,6 +458,31 @@ Full run: **244 tests / 28 suites pass**; `npm run build` passes. Browser, seed 
 (`?template=ceiling`): the bar is visible; the car dropped about 3.7 m under it and re-attached
 11 m past it; M returned to the menu, from which a new run started.
 
+## 21. Mobile controls — DONE
+
+- [x] Touch layout on coarse pointers (`?touch=1` to force). The left thumb has one ◀ ▶ turn pad:
+      it steers on a surface and rolls in the air, and a finger can slide across to switch sides.
+      Steering only acts on a surface and planned routes only roll in the air, so one pad replaces
+      four keys. The right thumb has hold buttons for SUCTION and LIFT, with BOOST above. A pause
+      button sits at the top right.
+- [x] Input: on-screen controls hold actions per touch source (multi-touch, pointer capture). The turn
+      pad is routed by the vehicle's mode each physics step. Blur and run start clear touch holds.
+- [x] Screens: pause adds a Controls button; help lists the touch controls and has a Resume button;
+      game over and pause rely on their tap buttons. The menu has tap wording and a two-column
+      landscape-phone layout that needs no scrolling. Gauges move to the top centre. Safe-area insets
+      are respected. Android goes fullscreen and locks landscape on start.
+- Rejected: tilt steering. It needs a permission prompt on iOS, and holding the phone level fights
+  the roll controls.
+
+Tests: touch holds per source with a single press edge; the turn pad steers on a surface and rolls in
+the air, and switches sides without lifting; clear and run start drop touch holds.
+Browser (844×390, 667×375, 390×844 with `?touch=1`):
+- the menu fits without scrolling;
+- LIFT lifts the car;
+- the pad steers left, then right while sliding, and rolls in the air;
+- pause, Controls, Resume, Try again and Main menu all work;
+- the gauges, score and controls do not overlap.
+
 ## Evidence / issues
 
 - Baseline environment had no `npm` on PATH; resolved with the verified local Node 22 distribution.

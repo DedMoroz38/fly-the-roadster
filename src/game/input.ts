@@ -11,7 +11,10 @@ export type Action =
   | 'pause'
   | 'help'
   | 'menu'
-  | 'debug';
+  | 'debug'
+  /** Touch turn pad: steers on a surface, rolls in the air. */
+  | 'turnLeft'
+  | 'turnRight';
 
 export const KEY_BINDINGS: Record<string, Action> = {
   KeyW: 'accelerate',
@@ -61,6 +64,8 @@ export class InputManager {
   private keys = new Set<string>();
   private blockedUntilRelease = new Set<string>();
   private pressed = new Set<Action>();
+  /** On-screen controls: each touch source (button, finger) holds at most one action. */
+  private virtual = new Map<string, Action>();
 
   keyDown(code: string, repeat = false): boolean {
     const action = KEY_BINDINGS[code];
@@ -81,8 +86,20 @@ export class InputManager {
     return true;
   }
 
+  /** An on-screen control starts (or switches) holding `action` for `source`. */
+  press(source: string, action: Action) {
+    if (this.virtual.get(source) === action) return;
+    if (!this.isHeld(action)) this.pressed.add(action);
+    this.virtual.set(source, action);
+  }
+
+  release(source: string) {
+    this.virtual.delete(source);
+  }
+
   /** Releases everything (e.g. on window blur, so keys don't get stuck). */
   clear() {
+    this.virtual.clear();
     this.blockedUntilRelease.clear();
     this.keys.clear();
     this.held.clear();
@@ -92,13 +109,16 @@ export class InputManager {
   /** Menu/start inputs cannot become gameplay inputs until their physical keys are released. */
   clearUntilRelease() {
     for (const key of this.keys) this.blockedUntilRelease.add(key);
+    this.virtual.clear();
     this.keys.clear();
     this.held.clear();
     this.pressed.clear();
   }
 
   isHeld(action: Action): boolean {
-    return this.held.has(action);
+    if (this.held.has(action)) return true;
+    for (const held of this.virtual.values()) if (held === action) return true;
+    return false;
   }
 
   /** Returns true once per physical press, then forgets it. */
@@ -108,16 +128,17 @@ export class InputManager {
     return had;
   }
 
-  /** Builds the held control snapshot for one simulation step. */
-  sample(): ControlState {
+  /** Builds the held control snapshot for one simulation step; `airborne` routes the touch turn pad. */
+  sample(airborne = false): ControlState {
+    const turnLeft = this.isHeld('turnLeft'), turnRight = this.isHeld('turnRight');
     return {
-      accelerate: this.held.has('accelerate'),
-      thrust: this.held.has('thrust'),
-      rollLeft: this.held.has('rollLeft'),
-      rollRight: this.held.has('rollRight'),
-      steerLeft: this.held.has('steerLeft'),
-      steerRight: this.held.has('steerRight'),
-      suction: this.held.has('suction'),
+      accelerate: this.isHeld('accelerate'),
+      thrust: this.isHeld('thrust'),
+      rollLeft: this.isHeld('rollLeft') || (airborne && turnLeft),
+      rollRight: this.isHeld('rollRight') || (airborne && turnRight),
+      steerLeft: this.isHeld('steerLeft') || (!airborne && turnLeft),
+      steerRight: this.isHeld('steerRight') || (!airborne && turnRight),
+      suction: this.isHeld('suction'),
     };
   }
 

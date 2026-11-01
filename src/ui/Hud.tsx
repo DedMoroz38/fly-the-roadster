@@ -4,6 +4,7 @@ import { FAIL_TEXT, flipPoints, SessionSnapshot } from '../game/session';
 import { CONFIG } from '../game/config';
 import { MainMenu } from './MainMenu';
 import { DEFAULT_VEHICLE } from '../render/vehicles';
+import { enterTouchFullscreen, TouchControls, useTouchDevice } from './TouchControls';
 
 const SUCTION_LABEL: Record<string, string> = {
   off: 'OFF',
@@ -33,6 +34,14 @@ const CONTROLS: [string, string][] = [
   ['M', 'Main menu (while paused or after a crash)'],
   ['H', 'Show / hide this help'],
   ['F3', 'Route and physics debug view'],
+];
+
+const TOUCH_CONTROLS: [string, string][] = [
+  ['◀ ▶ pad', 'Steer on a surface · roll in the air (slide across to switch)'],
+  ['LIFT', 'Main thrusters (push away from wheels)'],
+  ['SUCTION', 'Hold to engage · lift your thumb to let go'],
+  ['BOOST', 'Accelerate (uses fuel)'],
+  ['II', 'Pause · restart and main menu are on the pause screen'],
 ];
 
 const CHALLENGE_LABEL: Record<string, string> = {
@@ -69,14 +78,14 @@ export function DebugPanel({ snapshot: s }: { snapshot: SessionSnapshot }) {
   );
 }
 
-function HelpPanel() {
+function HelpPanel({ touch, onResume }: { touch: boolean; onResume: () => void }) {
   return (
     <div className="panel help">
       <h1>Fly the Roadster</h1>
       <p className="tagline">Drive, fly, roll and stick your way down an endless corridor.</p>
       <table>
         <tbody>
-          {CONTROLS.map(([k, a]) => (
+          {(touch ? TOUCH_CONTROLS : CONTROLS).map(([k, a]) => (
             <tr key={k}>
               <td><kbd>{k}</kbd></td>
               <td>{a}</td>
@@ -94,13 +103,16 @@ function HelpPanel() {
         <li>Bars hanging from a ceiling: release Shift just before one so the car drops under it, then hold Shift again right away to pull back up. Just after letting go, suction reaches further and pulls harder.</li>
         <li>You score a point per metre. Full rolls in one jump pay a bonus on a safe landing: 1 flip {flipPoints(1)}, 2 flips {flipPoints(2)}, 3 flips {flipPoints(3)}.</li>
       </ul>
-      <p className="cta">Press H or Esc to resume</p>
+      {touch
+        ? <div className="panel-actions"><button type="button" onClick={onResume}>Resume</button></div>
+        : <p className="cta">Press H or Esc to resume</p>}
     </div>
   );
 }
 
 export function Hud({ game }: { game: Game | null }) {
   const s = useSnapshot(game);
+  const touch = useTouchDevice();
   const [flash, setFlash] = useState(false);
   const lastRefuels = useRef(0);
   const [flip, setFlip] = useState<SessionSnapshot['lastFlip']>(null);
@@ -122,14 +134,14 @@ export function Hud({ game }: { game: Game | null }) {
     lastRefuels.current = s.refuels;
   }, [s?.refuels]);
   if (!s) return <div className="hud"><div className="loading">Loading…</div></div>;
-  if (s.state === 'ready') return <MainMenu onStart={() => game?.startRun()} seed={s.seed}
+  if (s.state === 'ready') return <MainMenu touch={touch} onStart={() => { if (touch) enterTouchFullscreen(); game?.startRun(); }} seed={s.seed}
     vehicleId={game?.vehicleId ?? DEFAULT_VEHICLE} onCycleVehicle={step => game?.cycleVehicle(step)} />;
 
   const fuelPct = Math.round(s.fuel * 100);
   const heatPct = Math.round(s.suctionHeat / CONFIG.suction.criticalHeat * 100);
   const heatWarning = s.suctionHeat >= CONFIG.suction.warningHeat;
   return (
-    <div className={`hud ${flash ? 'refuel-flash' : ''}`}>
+    <div className={`hud ${flash ? 'refuel-flash' : ''} ${touch ? 'touch' : ''}`}>
       <div className="hud-top">
         <div className="stat distance">
           <span className="value">{Math.floor(s.score)}</span>
@@ -175,19 +187,21 @@ export function Hud({ game }: { game: Game | null }) {
         </div>
       </div>
 
-      <div className="seed">seed {s.seed}</div>
-      <div className="control-hint">AUTO CRUISE · Space lift · ← → roll · Hold Shift suction · H help · F3 debug</div>
+      {!touch && <div className="seed">seed {s.seed}</div>}
+      {!touch && <div className="control-hint">AUTO CRUISE · Space lift · ← → roll · Hold Shift suction · H help · F3 debug</div>}
+      {touch && s.state === 'running' && !s.helpOpen && game && <TouchControls input={game.input} onPause={() => game.togglePause()} />}
 
-      {s.helpOpen && <div className="overlay"><HelpPanel /></div>}
+      {s.helpOpen && <div className="overlay"><HelpPanel touch={touch} onResume={() => game?.toggleHelp()} /></div>}
       {s.state === 'paused' && !s.helpOpen && (
         <div className="overlay">
           <div className="panel">
             <h2>Paused</h2>
-            <p>Esc to resume · R to restart · M for main menu · H for help</p>
+            {!touch && <p>Esc to resume · R to restart · M for main menu · H for help</p>}
             <div className="panel-actions">
               <button type="button" onClick={() => game?.togglePause()}>Resume</button>
               <button type="button" onClick={() => game?.restart()}>Restart</button>
               <button type="button" onClick={() => game?.returnToMenu()}>Main menu</button>
+              {touch && <button type="button" onClick={() => game?.toggleHelp()}>Controls</button>}
             </div>
           </div>
         </div>
@@ -198,7 +212,7 @@ export function Hud({ game }: { game: Game | null }) {
             <h2>{s.failReason ? FAIL_TEXT[s.failReason] : 'Game over'}</h2>
             <div className="final"><span className="value">{Math.floor(s.score)}</span> pts</div>
             <p>{Math.floor(s.distance)} m · Best: {Math.floor(s.best)} pts</p>
-            <p className="cta">Press R to try again · M for main menu</p>
+            {!touch && <p className="cta">Press R to try again · M for main menu</p>}
             <div className="panel-actions">
               <button type="button" onClick={() => game?.restart()}>Try again</button>
               <button type="button" onClick={() => game?.returnToMenu()}>Main menu</button>

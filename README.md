@@ -36,6 +36,22 @@ keypress is consumed so it cannot also fire the lift thrusters.
 | H | Help overlay |
 | F3 | Toggle physics telemetry and the intended route |
 
+On phones and tablets (any coarse pointer; `?touch=1` forces it with a mouse) on-screen controls replace
+the keys:
+
+| Control | Action |
+| --- | --- |
+| ◀ ▶ pad (left thumb) | Steer on a surface, roll in the air; slide across to switch sides |
+| SUCTION (right thumb) | Hold to engage, lift the thumb to let go |
+| LIFT (right thumb) | Main thrusters |
+| BOOST | Accelerate |
+| II | Pause; resume, restart, main menu and the controls list are buttons there |
+
+One pad covers both steering and roll, because steering only acts on a surface and the planned routes
+only roll in the air. On Android, starting a run goes fullscreen and locks landscape. iOS Safari does
+not allow either, and the menu suggests landscape. The menu switches to a two-column layout on
+landscape phones, and the gauges move to the top, clear of both thumbs.
+
 Cruise starts at 24 m/s and rises with difficulty to 36 m/s; W adds up to 8 m/s on top. There are no braking or reversing controls.
 Forces and torques drive the dynamic body, including roll against ground contact. Pitch and yaw
 are locked. A/D steer independently on surfaces; the arrows fire the visible roll-thruster pairs.

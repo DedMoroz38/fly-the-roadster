@@ -170,7 +170,7 @@ export class Game {
     const waiting = course.needsBuffer(s.sim.distance);
     if (waiting || s.state !== 'running') this.stepper.reset();
     const steps = waiting || s.state !== 'running' ? 0 : this.stepper.advance(dt);
-    for (let i = 0; i < steps; i++) s.step(this.input.sample());
+    for (let i = 0; i < steps; i++) s.step(this.input.sample(s.sim.vehicle.mode === 'airborne'));
 
     if (this.renderedAttempt !== s.attempt) {
       this.renderer.reset();

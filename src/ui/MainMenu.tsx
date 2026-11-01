@@ -8,10 +8,12 @@ export interface MainMenuProps {
   vehicleId: string;
   /** Moves the selection by ±1 through the vehicle list. */
   onCycleVehicle: (step: number) => void;
+  /** Phone layout: tap wording and the on-screen controls in place of keys. */
+  touch?: boolean;
 }
 
 /** Space is handled by Game; this button supplies pointer and native Enter activation. */
-export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle }: MainMenuProps) {
+export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle, touch = false }: MainMenuProps) {
   const preview = useRef<HTMLSpanElement>(null);
   const scene = useRef<MenuScene | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -47,8 +49,8 @@ export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle }: MainMenuP
           <span className="main-menu__car" ref={preview} aria-hidden="true">
             {previewFailed && <span className="main-menu__preview-fallback">Your roadster is ready.</span>}
           </span>
-          <span className="main-menu__start"><kbd>SPACE</kbd><span>TO DRIVE</span><span className="main-menu__arrow" aria-hidden="true">↗</span></span>
-          <span className="main-menu__click-hint">or click the {vehicle.name}</span>
+          <span className="main-menu__start">{touch ? <span>TAP TO DRIVE</span> : <><kbd>SPACE</kbd><span>TO DRIVE</span></>}<span className="main-menu__arrow" aria-hidden="true">↗</span></span>
+          <span className="main-menu__click-hint">{touch ? 'Best in landscape' : `or click the ${vehicle.name}`}</span>
         </button>
 
         <div className="main-menu__garage" role="group" aria-label="Choose your vehicle">
@@ -62,12 +64,20 @@ export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle }: MainMenuP
             : <>&nbsp;</>}
         </p>
 
-        <div className="main-menu__controls" aria-label="Driving controls">
-          <span><kbd>SPACE</kbd> Lift</span>
-          <span><kbd>← →</kbd> Roll · pick vehicle here</span>
-          <span><kbd>HOLD SHIFT</kbd> Suction</span>
-          <span><kbd>A D</kbd> Steer</span>
-        </div>
+        {touch ? (
+          <div className="main-menu__controls" aria-label="Touch controls">
+            <span><kbd>◀ ▶</kbd> Steer · roll in the air</span>
+            <span><kbd>LIFT</kbd> Thrusters</span>
+            <span><kbd>HOLD SUCTION</kbd> Stick to walls</span>
+          </div>
+        ) : (
+          <div className="main-menu__controls" aria-label="Driving controls">
+            <span><kbd>SPACE</kbd> Lift</span>
+            <span><kbd>← →</kbd> Roll · pick vehicle here</span>
+            <span><kbd>HOLD SHIFT</kbd> Suction</span>
+            <span><kbd>A D</kbd> Steer</span>
+          </div>
+        )}
       </div>
 
       <footer className="main-menu__footer">
