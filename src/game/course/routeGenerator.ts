@@ -2,12 +2,18 @@ import { hashSeed, Rng } from '../../core/rng';
 import { difficultyAt, GENERATOR_CONFIG, paceFor } from './generatorConfig';
 import { decorateChunk } from './decorator';
 import { initialReachableState, planChunk, PlannedChunk, ReachableState, ScenarioKind } from './planner';
+import { flightStartAfter, planFlightChunk, planZone, type FlightZone } from './flight';
 
 export const SCENARIOS: readonly ScenarioKind[] = ['normal', 'gap', 'ceiling', 'wall-left', 'wall-right', 'multiple', 'flight', 'hurdle'];
 
 export interface GeneratorOptions {
   /** Force a procedural challenge family for reproduction; parameters remain seeded. */
   template?: ScenarioKind;
+  /**
+   * Where the first flying section starts, in metres (default about 6000). With a forced template
+   * there are no flying sections unless this is given.
+   */
+  flightAt?: number;
 }
 
 export interface GenerationRecord {
@@ -29,8 +35,14 @@ export class ReachableCourseGenerator {
   frontier = 0;
   private nextId = 0;
   private exitState: ReachableState = initialReachableState();
+  /** The flying section being generated, if any, and where the next one is due. */
+  private zone: FlightZone | null = null;
+  private zonesDone = 0;
+  private nextFlight: number;
 
-  constructor(readonly seed: number, readonly options: GeneratorOptions = {}) {}
+  constructor(readonly seed: number, readonly options: GeneratorOptions = {}) {
+    this.nextFlight = options.flightAt ?? (options.template ? Infinity : flightStartAfter(seed, 0, 0));
+  }
 
   private chooseKind(rng: Rng, difficulty: number): ScenarioKind {
     if (this.options.template) return this.options.template;
@@ -53,7 +65,36 @@ export class ReachableCourseGenerator {
     return 'gap';
   }
 
+  /** The next piece of a flying section, starting one when the course reaches its start. */
+  private nextFlightChunk(): GeneratedChunk | null {
+    if (!this.zone) {
+      if (this.frontier < this.nextFlight) return null;
+      this.zone = planZone(this.seed, this.zonesDone, this.frontier);
+    }
+    const zone = this.zone;
+    const difficulty = difficultyAt(this.frontier);
+    const chunk: GeneratedChunk = {
+      ...planFlightChunk({
+        id: this.nextId, seed: this.seed, d0: this.frontier, zone, difficulty, entry: { ...this.exitState }, pace: paceFor(difficulty),
+      }),
+      generation: { requested: 'fly', attempts: 1, fallback: false, rejectedReasons: [] },
+    };
+    if (chunk.d1 >= zone.end) {
+      this.zone = null;
+      this.nextFlight = flightStartAfter(this.seed, ++this.zonesDone, chunk.d1);
+    }
+    return chunk;
+  }
+
   next(): GeneratedChunk {
+    const flying = this.nextFlightChunk();
+    if (flying) {
+      this.exitState = { ...flying.exit };
+      this.frontier = flying.d1;
+      this.nextId++;
+      this.chunks.push(flying);
+      return flying;
+    }
     const chunkSeed = hashSeed(`${this.seed >>> 0}:${this.nextId}`);
     const difficulty = difficultyAt(this.frontier);
     // A fallback road keeps the requested pace, so the car never slows down abruptly.

@@ -119,6 +119,17 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
 .main-menu__launch:focus-visible { outline: 2px solid #73ddff; outline-offset: 5px; background: #62ccff06; }
 .main-menu__car { display: block; width: 100%; height: clamp(210px, 37vh, 340px); pointer-events: none; }
 .main-menu__car canvas { display: block; width: 100%; height: 100%; }
+.main-menu__car { position: relative; }
+/*
+ * The Roadster's stage: its picture fills the page behind the menu (the parked cars and the light
+ * strips run past the box), drawn so the box shows exactly what it shows for every other vehicle.
+ * Stars at the back, then a black night that fades in for the demo, then the picture, then the menu.
+ */
+.main-menu::before { z-index: -3; }
+.main-menu::after { content: ''; position: fixed; inset: 0; z-index: -2; background: #020309; opacity: 0; pointer-events: none; transition: opacity .7s ease; }
+.main-menu--demo::after { opacity: 1; }
+.main-menu__car--stage canvas { position: fixed; inset: 0; z-index: -1; width: 100vw; height: 100vh; }
+.menu-armory-hint { position: absolute; left: 50%; top: 20px; transform: translateX(-50%); color: #8fb6d4; font-size: 11px; letter-spacing: .06em; white-space: nowrap; pointer-events: none; text-shadow: 0 1px 6px #000; }
 .main-menu__start { display: flex; justify-content: center; align-items: center; gap: 14px; padding: 12px 20px; margin-top: -1px; border: 1px solid #78ddff70; border-radius: 5px; color: #c5f3ff; background: linear-gradient(110deg, #17465d75, #1f284c75); box-shadow: 0 0 30px #47cfff12, inset 0 1px #c2f3ff12; font-size: 12px; font-weight: 600; letter-spacing: .2em; transition: border-color .18s, background .18s, box-shadow .18s; }
 .main-menu__start kbd { padding: 4px 8px; min-width: 0; border-color: #98dbea60; border-radius: 3px; color: #e4fbff; font-size: 11px; letter-spacing: .12em; }
 .main-menu__arrow { color: #6de1ff; font-size: 20px; font-weight: 400; line-height: .7; }
@@ -127,9 +138,19 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
 .main-menu__garage { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 18px; }
 .main-menu__vehicle { min-width: 150px; color: #e4f5ff; font-size: 13px; font-weight: 600; letter-spacing: .16em; text-align: center; text-transform: uppercase; }
 .main-menu__pick { display: grid; place-items: center; width: 34px; height: 34px; padding: 0 0 3px; border: 1px solid #78ddff55; border-radius: 50%; background: #17465d40; color: #bdefff; font: inherit; font-size: 22px; line-height: 1; cursor: pointer; transition: border-color .18s, background .18s; }
+.main-menu__garage { position: relative; }
+.main-menu__demo { position: absolute; left: calc(100% + 18px); top: 50%; transform: translateY(-50%); white-space: nowrap; padding: 7px 16px; border: 1px solid #78ddff55; border-radius: 999px; background: #17465d40; color: #bdefff; font: inherit; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; cursor: pointer; transition: border-color .18s, background .18s; }
+.main-menu__demo:hover:not(:disabled), .main-menu__demo:focus-visible { border-color: #a1ecff; background: #21627a80; outline: none; }
+.main-menu__demo:disabled { opacity: .6; cursor: default; }
+.main-menu__topline, .main-menu__heading, .main-menu__start, .main-menu__click-hint, .main-menu__garage, .main-menu__demo, .main-menu__credits, .main-menu__controls, .main-menu__footer { transition: opacity .4s; }
+/* While the Roadster's demo runs the menu steps aside and the stage fills the page. */
+.main-menu--demo .main-menu__topline, .main-menu--demo .main-menu__heading, .main-menu--demo .main-menu__start, .main-menu--demo .main-menu__click-hint, .main-menu--demo .main-menu__garage, .main-menu--demo .main-menu__demo, .main-menu--demo .main-menu__credits, .main-menu--demo .main-menu__controls, .main-menu--demo .main-menu__footer { opacity: 0; pointer-events: none; }
+.main-menu--demo .main-menu__launch { pointer-events: none; }
 .main-menu__pick:hover, .main-menu__pick:focus-visible { border-color: #a1ecff; background: #21627a80; outline: none; }
+.main-menu__credits { flex: none; height: 64px; }
 .main-menu__credit { min-height: 1.5em; margin: 9px 0 0; color: #61758f; font-size: 10px; letter-spacing: .03em; text-align: center; }
 .main-menu__credit a { color: #8fb6d4; }
+.main-menu__credit--world { margin-top: 2px; }
 .main-menu__controls { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px 24px; margin-top: 24px; color: #8ca2ba; font-size: 11px; }
 .main-menu__controls > span { display: flex; align-items: center; gap: 7px; }
 .main-menu__controls kbd { min-width: 0; padding: 3px 6px; border: 1px solid #7088a530; background: #a4c8ff06; border-radius: 4px; color: #b4c9df; font-size: 10px; letter-spacing: .04em; }
@@ -145,6 +166,10 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
   .main-menu__tagline { max-width: 270px; margin: 15px auto 0; font-size: 12px; line-height: 1.5; }
   .main-menu__car { height: clamp(220px, 34vh, 300px); }
   .main-menu__controls { max-width: 330px; gap: 10px 18px; margin-top: 20px; }
+  /* Phones: the long credits take the room they need, and the demo button joins the picker's row. */
+  .main-menu__credits { height: auto; }
+  .main-menu__garage { gap: 10px; }
+  .main-menu__demo { position: static; transform: none; padding: 6px 11px; font-size: 11px; letter-spacing: .08em; }
   .main-menu__footer { flex-wrap: wrap; justify-content: center; gap: 8px; text-align: center; }
 }
 @media (max-height: 650px) and (min-width: 621px) {
@@ -162,7 +187,8 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
   .main-menu { padding: calc(8px + env(safe-area-inset-top)) calc(18px + env(safe-area-inset-right)) 8px calc(18px + env(safe-area-inset-left)); overflow: hidden; }
   .main-menu__topline, .main-menu__footer, .main-menu__eyebrow, .main-menu__tagline { display: none; }
   .main-menu__content { min-height: 0; flex: 1 1 auto; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); align-content: center; align-items: center; column-gap: 12px; }
-  .main-menu__heading, .main-menu__garage, .main-menu__credit, .main-menu__controls { grid-column: 1; }
+  .main-menu__heading, .main-menu__garage, .main-menu__credits, .main-menu__controls { grid-column: 1; }
+  .main-menu__credits { height: auto; }
   .main-menu__heading h1 { font-size: clamp(34px, 6.5vw, 52px); }
   .main-menu__launch { grid-column: 2; grid-row: 1 / span 4; margin: 0; }
   .main-menu__car { height: min(60vh, 240px); }
@@ -223,3 +249,18 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 6
   .touch-boost { width: 52px; height: 52px; }
   .touch-actions { gap: 10px 12px; }
 }
+
+/* The dino world is pale by day, so the HUD sits on a dark scrim to stay readable in both palettes. */
+.game-host[data-world="dino"] ~ .hud .hud-top,
+.game-host[data-world="dino"] ~ .hud .hud-bottom { background: rgba(14, 16, 24, 0.6); border-radius: 12px; padding: 8px 12px; }
+
+/* Flying sections: a banner under the score and an unlimited fuel gauge. */
+.flight-banner { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); max-width: min(460px, calc(100% - 44px)); padding: 9px 16px; text-align: center; background: var(--panel); border: 1px solid rgba(120, 221, 255, 0.4); border-radius: 10px; }
+.flight-banner .label { display: block; margin: 0 0 4px; color: var(--cyan); letter-spacing: 0.14em; font-size: 12px; }
+.flight-banner strong { display: block; font-size: 14px; font-weight: 500; line-height: 1.4; }
+.flight-takeoff, .flight-landing { border-color: var(--green); }
+.flight-takeoff .label, .flight-landing .label { color: var(--green); }
+.fuel.unlimited .fill { background: linear-gradient(90deg, #6bd9ff, #b07cff); }
+.fuel.unlimited .pct { font-size: 20px; line-height: 1; color: #bdefff; }
+.hud.touch .flight-banner { top: calc(10px + env(safe-area-inset-top)); padding: 6px 12px; }
+.hud.touch .flight-banner strong { font-size: 12px; }

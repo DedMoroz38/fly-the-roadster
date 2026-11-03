@@ -43,7 +43,10 @@ export class Game {
     const query = new URLSearchParams(window.location.search);
     const requested = query.get('template') as ScenarioKind | null;
     const template = requested && SCENARIOS.includes(requested) ? requested : undefined;
-    const initialSource = new WorkerChunkSource(this.seed, { template });
+    // `?flyat=300` brings the first flying section forward, for trying it without driving 6000 m.
+    const flyat = Number(query.get('flyat'));
+    const flightAt = query.get('flyat') !== null && Number.isFinite(flyat) && flyat >= 0 ? flyat : undefined;
+    const initialSource = new WorkerChunkSource(this.seed, { template, flightAt });
     this.terrainSource = initialSource;
     // The car mesh loads alongside the opening terrain; a failed load is logged, not fatal.
     try { await Promise.all([initialSource.ready, loadVehicle(this.vehicleId).catch(() => undefined)]); }
@@ -55,7 +58,7 @@ export class Game {
       const source = first ? initialSource : initialSource.restartSource();
       first = false;
       this.terrainSource = source;
-      return new Course(w, seed, { template, source });
+      return new Course(w, seed, { template, flightAt, source });
     } }));
     this.session.debugEnabled = query.get('debug') === '1';
     this.stepper = new FixedStepper(this.session.sim.dt);

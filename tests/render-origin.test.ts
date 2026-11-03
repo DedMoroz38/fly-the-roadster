@@ -4,7 +4,7 @@ import type { RouteWaypoint } from '../src/game/course/planner';
 import type { Level, SlabSet } from '../src/game/physics/level';
 import { CameraRig } from '../src/render/cameraRig';
 import { CourseRouteView, ObstacleView } from '../src/render/gameRenderer';
-import { PickupView } from '../src/render/pickupView';
+import { PICKUP_LIGHTS, PickupView } from '../src/render/pickupView';
 import { SurfaceView } from '../src/render/surfaceView';
 
 describe('floating-origin rendering', () => {
@@ -85,5 +85,31 @@ describe('floating-origin rendering', () => {
     expect(afterCamera.position.x).toBeCloseTo(beforeCamera.position.x, 8);
     expect(afterCamera.position.y).toBeCloseTo(beforeCamera.position.y, 8);
     expect(Math.abs(afterCamera.quaternion.dot(beforeCamera.quaternion))).toBeCloseTo(1, 8);
+  });
+});
+
+describe('pickup lights', () => {
+  it('keeps the light count fixed as cells come and go, lighting the nearest ones ahead', () => {
+    // A changing light count makes three.js recompile every lit material: a long freeze on refuel.
+    const pickups = new PickupView();
+    const scene = new THREE.Scene();
+    scene.add(pickups.group, pickups.lights);
+    const countLights = () => { let n = 0; scene.traverseVisible(o => { if ((o as THREE.Light).isLight) n++; }); return n; };
+    const fixed = countLights();
+    expect(fixed).toBe(PICKUP_LIGHTS);
+    const cell = (id: number, d: number) => [id, { id, x: 0, y: 1.5, d }] as const;
+    const level = { activePickups: new Map([cell(1, 40), cell(2, 90), cell(3, 160)]) } as unknown as Level;
+    pickups.sync(level, 30, 0);
+    pickups.update(0.016);
+    expect(countLights()).toBe(fixed);
+    const lit = pickups.lights.children.filter(l => (l as THREE.PointLight).intensity > 0).map(l => l.position.z).sort((a, b) => b - a);
+    expect(lit).toEqual([-40, -90]);
+    level.activePickups!.delete(1);
+    level.activePickups!.delete(2);
+    level.activePickups!.delete(3);
+    pickups.sync(level, 45, 0);
+    pickups.update(0.016);
+    expect(countLights()).toBe(fixed);
+    expect(pickups.lights.children.every(l => (l as THREE.PointLight).intensity === 0)).toBe(true);
   });
 });

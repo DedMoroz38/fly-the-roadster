@@ -12,6 +12,15 @@ export interface Environment {
   readonly bloom: BloomSettings | null;
   /** Intensity of the light that travels with the vehicle. */
   readonly carLight: number;
+  /** Optional reflections for metal surfaces; built on demand because it needs the renderer. */
+  environmentMap?(renderer: THREE.WebGLRenderer): THREE.Texture;
+  /**
+   * Hands over the renderer's shader precompiler, for parts that appear later (hidden effects,
+   * models that are still downloading); compiling them on first sight would freeze that frame.
+   */
+  prepare?(precompile: (object: THREE.Object3D) => void): void;
+  /** A new attempt starts (restart): drop per-run surroundings such as the order of passing objects. */
+  reset?(): void;
   /** cameraDistance: the camera's logical forward distance, for scenery that scrolls with travel. */
   update(camera: THREE.PerspectiveCamera, cameraDistance: number, dt: number): void;
   dispose(): void;

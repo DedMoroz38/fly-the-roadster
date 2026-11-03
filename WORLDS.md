@@ -1,6 +1,7 @@
 # Worlds per vehicle
 
-> Status: Steve's voxel sky-island world is built (see README → Worlds). Other worlds are ideas.
+> Status: Steve's voxel sky-island world, the Cybertruck's Mars world, the Roadster's Earth orbit and
+> the Chrome Dino's offline desert are built (see README → Worlds). Other worlds are ideas.
 
 Idea: each vehicle gets its own world. The track, hazards and sky are restyled, and the course
 itself (layout, physics, validation) stays the same for everyone. Steve's world should look like a

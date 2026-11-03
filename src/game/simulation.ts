@@ -82,6 +82,8 @@ export class Simulation {
       this.queriedSlabVersion = slabVersion;
       this.queriedObstacleVersion = obstacleVersion;
     }
+    const flying = this.level.flightAt?.(this.distance);
+    if (flying !== undefined) this.vehicle.flying = flying;
     this.vehicle.applyControls(controls, this.dt, this.fuel);
     this.world.step();
     this.vehicle.afterStep(controls);

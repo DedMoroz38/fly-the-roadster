@@ -6,6 +6,7 @@ import { ChunkSource, SynchronousChunkSource } from './chunkSource';
 import { GENERATOR_CONFIG, difficultyAt, paceFor } from './generatorConfig';
 import { GeneratedChunk, GeneratorOptions } from './routeGenerator';
 import type { RouteWaypoint } from './planner';
+import { flightCueAt, type FlightCue } from './flight';
 
 export const STREAM = GENERATOR_CONFIG;
 export interface CourseOptions extends GeneratorOptions { source?: ChunkSource }
@@ -76,6 +77,18 @@ export class Course implements Level {
   /** Each chunk's validated speed applies from its start; before the first chunk, the base pace. */
   paceAt(distance: number) {
     return this.chunks.find(c => distance >= c.d0 && distance < c.d1)?.pace;
+  }
+  /** Flying sections have no floor, ceiling or walls; the car gets unlimited fuel and banks instead of rolling. */
+  flightAt(distance: number) {
+    return this.chunks.some(c => c.flight !== undefined && distance >= c.flight.from && distance < c.flight.to);
+  }
+  /** The nearest flying section's cue, for the HUD: warning before it, take-off, flying, landing. */
+  flightCue(distance: number): FlightCue | null {
+    for (const chunk of this.chunks) {
+      const zone = chunk.flight?.zone;
+      if (zone) { const cue = flightCueAt(zone, distance); if (cue) return cue; }
+    }
+    return null;
   }
   collect(id: number) { return this.activePickups.delete(id); }
   /** Logical course distances stay unchanged while physics uses a nearby origin. */

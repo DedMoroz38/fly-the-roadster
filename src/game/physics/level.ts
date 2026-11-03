@@ -137,6 +137,8 @@ export interface ObstacleLike {
   y: number;
   d: number;
   half: { x: number; y: number; z: number };
+  /** How the world should dress it; by default this follows from its size and place. */
+  kind?: 'block' | 'gate' | 'barrier';
 }
 
 /** Static hazard colliders with the same bounded add/remove lifecycle as surface slabs. */
@@ -188,6 +190,8 @@ export interface Level {
   collect?(id: number): boolean;
   /** Optional cruise/boost speed targets (m/s) at a forward distance. */
   paceAt?(distance: number): { cruise: number; max: number } | undefined;
+  /** Whether a forward distance lies in a flying section (unlimited fuel, banked roll, wide play volume). */
+  flightAt?(distance: number): boolean;
 }
 
 /** Fixed list of slabs (and optional pickups); used by tests and debugging. */

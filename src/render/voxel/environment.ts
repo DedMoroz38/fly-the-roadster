@@ -4,7 +4,7 @@ import { blockAtlas, blockTexture } from './textures';
 import { buildIslandTile, ISLAND_CONFIG, SUN_DIR, type IslandTile } from './islands';
 import { buildMountainTile, MOUNTAIN_CONFIG } from './mountains';
 import { buildMob, type Mob } from './mobs';
-import { ParallaxLayer, type ParallaxTile } from './parallax';
+import { ParallaxLayer, type ParallaxTile } from '../parallax';
 import { VoxelSky } from './sky';
 import { VOXEL_TIME } from './trackStyle';
 

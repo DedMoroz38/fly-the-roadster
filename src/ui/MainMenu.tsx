@@ -1,6 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import { MenuScene } from '../render/menuScene';
-import { vehicleById } from '../render/vehicles';
+import { MenuScene, type DemoState } from '../render/menuScene';
+import { marsPropCredits } from '../render/mars/props';
+import { AUDIENCE_CREDITS } from '../render/menuDemo';
+import { orbitCredits } from '../render/orbit/spaceProps';
+import { CC_BY, vehicleById, vehicleWorld, type VehicleCredit } from '../render/vehicles';
+import type { WorldId } from '../render/worlds';
+
+/** Credits for the downloaded models a world shows, under a label. */
+function sceneryCredits(world: WorldId): { label: string; credits: VehicleCredit[] } | null {
+  if (world === 'mars') return { label: 'Mars scenery', credits: marsPropCredits() };
+  if (world === 'orbit') return { label: 'In orbit', credits: orbitCredits() };
+  return null;
+}
+
+const License = ({ credit }: { credit: VehicleCredit }) => {
+  const license = credit.license ?? CC_BY;
+  return <a href={license.url} target="_blank" rel="noopener noreferrer">{license.label}</a>;
+};
 
 export interface MainMenuProps {
   onStart: () => void;
@@ -17,11 +33,13 @@ export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle, touch = fal
   const preview = useRef<HTMLSpanElement>(null);
   const scene = useRef<MenuScene | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
+  const [demo, setDemo] = useState<DemoState>('idle');
   useEffect(() => {
     if (!preview.current) return;
     try {
       const menuScene = new MenuScene(preview.current, vehicleId);
       scene.current = menuScene;
+      menuScene.onDemoChange(setDemo);
       return () => { menuScene.dispose(); scene.current = null; };
     } catch {
       setPreviewFailed(true);
@@ -29,10 +47,19 @@ export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle, touch = fal
     // The showroom is built once; vehicle changes are applied below without rebuilding it.
   }, []);
   useEffect(() => { scene.current?.setVehicle(vehicleId); }, [vehicleId]);
+  // While the show runs the page is just the show: Esc stops it, and so does a click anywhere.
+  useEffect(() => {
+    if (demo !== 'playing') return;
+    const stop = (event: KeyboardEvent) => { if (event.code === 'Escape') scene.current?.cancelDemo(); };
+    window.addEventListener('keydown', stop);
+    return () => window.removeEventListener('keydown', stop);
+  }, [demo]);
   const vehicle = vehicleById(vehicleId);
+  const scenery = sceneryCredits(vehicleWorld(vehicle.id));
 
   return (
-    <main className="main-menu" aria-labelledby="main-menu-title">
+    <main className={`main-menu${demo === 'playing' ? ' main-menu--demo' : ''}`} aria-labelledby="main-menu-title"
+      onClick={demo === 'playing' ? () => scene.current?.cancelDemo() : undefined}>
       <header className="main-menu__topline">
         <span className="main-menu__brand"><span className="main-menu__mark" aria-hidden="true">F/R</span> FLY THE ROADSTER</span>
         <span className="main-menu__edition">ENDLESS ARCADE · V2</span>
@@ -46,7 +73,7 @@ export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle, touch = fal
         </div>
 
         <button className="main-menu__launch" type="button" onClick={onStart} aria-label="Start Fly the Roadster">
-          <span className="main-menu__car" ref={preview} aria-hidden="true">
+          <span className={`main-menu__car${vehicle.demo ? ' main-menu__car--stage' : ''}`} ref={preview} aria-hidden="true">
             {previewFailed && <span className="main-menu__preview-fallback">Your roadster is ready.</span>}
           </span>
           <span className="main-menu__start">{touch ? <span>TAP TO DRIVE</span> : <><kbd>SPACE</kbd><span>TO DRIVE</span></>}<span className="main-menu__arrow" aria-hidden="true">↗</span></span>
@@ -57,12 +84,32 @@ export function MainMenu({ onStart, seed, vehicleId, onCycleVehicle, touch = fal
           <button type="button" className="main-menu__pick" onClick={() => onCycleVehicle(-1)} aria-label="Previous vehicle">‹</button>
           <span className="main-menu__vehicle" aria-live="polite">{vehicle.name}</span>
           <button type="button" className="main-menu__pick" onClick={() => onCycleVehicle(1)} aria-label="Next vehicle">›</button>
+          {/* Beside the picker, out of the flow, so the Roadster's menu is laid out exactly like the others. */}
+          {vehicle.demo && (
+            <button type="button" className="main-menu__demo" disabled={demo !== 'idle'}
+              onClick={event => { event.currentTarget.blur(); void scene.current?.playDemo(); }}>
+              {demo === 'loading' ? 'Loading demo…' : 'Show demo'}
+            </button>
+          )}
         </div>
-        <p className="main-menu__credit">
-          {vehicle.credit
-            ? <>Model: <a href={vehicle.credit.url} target="_blank" rel="noopener noreferrer">“{vehicle.credit.title}”</a> by {vehicle.credit.author} · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a></>
-            : <>&nbsp;</>}
-        </p>
+        {/* A fixed height whatever the vehicle, so longer credits never move the car or the controls. */}
+        <div className="main-menu__credits">
+          <p className="main-menu__credit">
+            {vehicle.credit
+              ? <>Model: <a href={vehicle.credit.url} target="_blank" rel="noopener noreferrer">“{vehicle.credit.title}”</a> by {vehicle.credit.author} · <License credit={vehicle.credit} /></>
+              : <>&nbsp;</>}
+          </p>
+          {scenery && scenery.credits.length > 0 && (
+            <p className="main-menu__credit main-menu__credit--world">
+              {scenery.label}: {scenery.credits.map((credit, i) => (
+                <span key={credit.url}>{i > 0 && ', '}<a href={credit.url} target="_blank" rel="noopener noreferrer">“{credit.title}”</a> by {credit.author} (<License credit={credit} />)</span>
+              ))}
+              {vehicle.demo && <> · Demo cars: {AUDIENCE_CREDITS.map((credit, i) => (
+                <span key={credit.url}>{i > 0 && ', '}<a href={credit.url} target="_blank" rel="noopener noreferrer">“{credit.title}”</a> by {credit.author} (<License credit={credit} />)</span>
+              ))}</>}
+            </p>
+          )}
+        </div>
 
         {touch ? (
           <div className="main-menu__controls" aria-label="Touch controls">

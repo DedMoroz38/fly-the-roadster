@@ -53,6 +53,8 @@ export class Vehicle {
   /** Current pace targets; a course raises them with difficulty. */
   cruiseSpeed: number = CONFIG.car.cruiseSpeed;
   maxSpeed: number = CONFIG.car.maxForwardSpeed;
+  /** In a flying section: unlimited fuel, banked (never flipped) roll, no suction. Set by the simulation. */
+  flying = false;
   suctionOverheated = false;
   suctionState: SuctionState = 'off';
   /** True on the step where a suction attachment was newly made (for effects). */
@@ -145,8 +147,15 @@ export class Vehicle {
   }
 
   /** Applies bounded forces and torque before Rapier resolves contacts. */
-  applyControls(c: ControlState, dt: number, fuel: FuelTank) {
+  applyControls(controls: ControlState, dt: number, fuel: FuelTank) {
+    let c = controls;
     const car = CONFIG.car;
+    const fly = CONFIG.flight;
+    if (this.flying) {
+      // Unlimited fuel; A/D bank like the arrows, and suction has nothing to hold on to.
+      fuel.refill();
+      c = { ...c, suction: false, rollLeft: c.rollLeft || c.steerLeft, rollRight: c.rollRight || c.steerRight };
+    }
     // Rapier keeps applied forces until explicitly cleared; controls describe this step only.
     this.body.resetForces(true);
     this.body.resetTorques(true);
@@ -171,6 +180,7 @@ export class Vehicle {
       + (requestedRoll ? CONFIG.thrusters.rollFuelRate : 0)
       + (this.suctionOn ? (floorContact ? CONFIG.suction.floorFuelRate : CONFIG.suction.fuelRate) : 0);
     const power = fuel.consume(dt, energyRate);
+    if (this.flying) fuel.refill();
     this.liftThrust = c.thrust ? power : 0;
     if (fuel.isEmpty) this.suctionOn = false;
     const suction = evaluateSuction(this.suctionOn, this.probe, this.recatch > 0
@@ -227,8 +237,10 @@ export class Vehicle {
       acceleration.y += tangent.y * lateralAccel;
     }
 
-    acceleration.x += up.x * CONFIG.thrusters.liftAccel * this.liftThrust;
-    acceleration.y += up.y * CONFIG.thrusters.liftAccel * this.liftThrust;
+    const liftAccel = this.flying ? fly.liftAccel : CONFIG.thrusters.liftAccel;
+    acceleration.x += up.x * liftAccel * this.liftThrust;
+    acceleration.y += up.y * liftAccel * this.liftThrust;
+    if (this.flying) acceleration.y -= v.y * fly.verticalDrag;
 
     if (n && suction.state === 'attracting') {
       const toward = -dot(v, n);
@@ -246,7 +258,7 @@ export class Vehicle {
     }
     this.body.addForce({ x: acceleration.x * mass, y: acceleration.y * mass, z: acceleration.z * mass }, true);
     this.body.setGravityScale(
-      this.mode === 'attached' ? 0 : suction.state === 'attracting' ? CONFIG.suction.attractGravityScale : 1,
+      this.mode === 'attached' ? 0 : suction.state === 'attracting' ? CONFIG.suction.attractGravityScale : this.flying ? fly.gravityScale : 1,
       true,
     );
 
@@ -260,7 +272,14 @@ export class Vehicle {
     });
     let angularAccel: number;
     const limit = contact ? car.contactRollAccel : car.rollAccel;
-    if (input) {
+    if (this.flying) {
+      // Bank toward the held key's limit and level out on release; the car never rolls past maxBank.
+      const target = requestedRoll * fly.maxBankDeg * Math.PI / 180;
+      const targetW = clamp(wrapAngle(target - this.roll) * fly.bankGain, -fly.bankRate, fly.bankRate);
+      angularAccel = clamp((targetW - w) * car.rollDamping, -fly.bankAccel, fly.bankAccel);
+      this.rollLeftThrust = Math.max(0, angularAccel) / fly.bankAccel;
+      this.rollRightThrust = Math.max(0, -angularAccel) / fly.bankAccel;
+    } else if (input) {
       // Pure torque has zero net linear force. The solver provides ground resistance and
       // pivot motion; enough sustained torque can tip the car without an artificial hop.
       angularAccel = clamp((input * car.rollSpeed - w) * car.rollInputGain, -limit, limit) * power;
@@ -275,8 +294,10 @@ export class Vehicle {
       const targetW = target === null ? 0 : clamp(wrapAngle(target - this.roll) * car.rollAssistGain, -car.rollSpeed, car.rollSpeed);
       angularAccel = clamp((targetW - w) * car.rollDamping, -car.rollBrake, car.rollBrake);
     }
-    this.rollLeftThrust = input > 0 ? Math.max(0.2 * power, Math.max(0, angularAccel) / limit) : 0;
-    this.rollRightThrust = input < 0 ? Math.max(0.2 * power, Math.max(0, -angularAccel) / limit) : 0;
+    if (!this.flying) {
+      this.rollLeftThrust = input > 0 ? Math.max(0.2 * power, Math.max(0, angularAccel) / limit) : 0;
+      this.rollRightThrust = input < 0 ? Math.max(0.2 * power, Math.max(0, -angularAccel) / limit) : 0;
+    }
     const inertia = this.body.effectiveAngularInertia().m33;
     this.body.addTorque({ x: 0, y: 0, z: inertia * angularAccel }, true);
   }

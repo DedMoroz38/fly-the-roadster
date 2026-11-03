@@ -209,6 +209,12 @@ export class CarModel {
     this.mixer?.update(dt * Math.max(1, forwardSpeed / CONFIG.car.cruiseSpeed));
   }
 
+  /** The visible vehicle model (null until it has downloaded), for hit tests on the menu. */
+  get bodyObject(): THREE.Object3D | null { return this.body; }
+
+  /** Called after a downloaded body is attached (the game renderer precompiles its shaders). */
+  onBody: (() => void) | null = null;
+
   /** Swaps the visible body; the physics body is the same for every vehicle. */
   setVehicle(id: string) {
     this.vehicleId = vehicleById(id).id;
@@ -216,7 +222,7 @@ export class CarModel {
     if (typeof document === 'undefined') return;
     const requested = this.vehicleId;
     loadVehicle(requested).then(
-      vehicle => { if (this.vehicleId === requested) this.attachBody(vehicle); },
+      vehicle => { if (this.vehicleId === requested) { this.attachBody(vehicle); this.onBody?.(); } },
       error => console.error(`Vehicle ${requested} failed to load`, error),
     );
   }

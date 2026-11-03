@@ -17,7 +17,7 @@ import { neonObstacles, obstacleKind, type ObstacleKind, type ObstacleStyle } fr
 interface RouteSource { version: number; readonly routeWaypoints: readonly RouteWaypoint[] }
 interface ObstacleSource {
   version: number;
-  active: ReadonlyMap<number, { id: number; x: number; y: number; d: number; half: { x: number; y: number; z: number } }>;
+  active: ReadonlyMap<number, { id: number; x: number; y: number; d: number; half: { x: number; y: number; z: number }; kind?: ObstacleKind }>;
 }
 
 /** A development-only movement trace. Rebuild only when streamed route data changes. */
@@ -96,6 +96,14 @@ export class ObstacleView {
     return material;
   }
 
+  /** One object per hazard kind, for compiling shaders before the first hazard appears. */
+  samples(): THREE.Object3D[] {
+    return (['block', 'gate', 'barrier'] as const).flatMap(kind => {
+      const edges = this.style.edges(kind);
+      return [new THREE.Mesh(this.box, this.material(kind)), ...(edges ? [new THREE.LineSegments(this.edges, edges)] : [])];
+    });
+  }
+
   sync(source: ObstacleSource | undefined, originDistance = 0) {
     if (!source) { if (this.source) this.clear(); return; }
     if (source !== this.source) { this.clear(); this.source = source; }
@@ -163,9 +171,11 @@ export class GameRenderer {
 
   constructor(private host: HTMLElement, world: WorldId = 'neon', seed = 0) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // 1.5 is sharp on high-density screens at about half the pixels of 2, which the bloom pass also pays for.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // Khronos PBR Neutral keeps base colours true; ACES shifted hues (washed-out suns, olive skies).
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
     host.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(70, 1, 0.1, 700);
@@ -174,6 +184,8 @@ export class GameRenderer {
     this.carLight = new THREE.PointLight(0x66e0ff, 30, 18, 1.6);
     this.scene.add(this.carLight);
     this.scene.add(this.car.group);
+    // Vehicle models download after the world is set up; compile each body as it arrives.
+    this.car.onBody = () => this.precompile(this.car.group);
     this.scene.add(this.route.group);
     this.setWorld(world, seed);
   }
@@ -185,6 +197,7 @@ export class GameRenderer {
   setWorld(id: WorldId, seed = this.worldSeed) {
     if (id === this.worldId && seed === this.worldSeed) return;
     const world = WORLDS[id];
+    if (this.pickups) this.scene.remove(this.pickups.lights);
     for (const view of [this.surfaces, this.pickups, this.obstacles]) {
       if (!view) continue;
       this.scene.remove(view.group);
@@ -195,9 +208,10 @@ export class GameRenderer {
     this.pickups = new PickupView(world.pickups());
     this.obstacles = new ObstacleView(world.obstacles());
     this.environment = world.environment(seed);
-    this.scene.add(this.environment.group, this.surfaces.group, this.pickups.group, this.obstacles.group);
+    this.scene.add(this.environment.group, this.surfaces.group, this.pickups.group, this.pickups.lights, this.obstacles.group);
     this.carLight.intensity = this.environment.carLight;
     this.scene.background = this.environment.background;
+    this.scene.environment = this.environment.environmentMap?.(this.renderer) ?? null;
     this.scene.fog = this.environment.fog;
     this.camera.far = this.environment.cameraFar;
     this.composer?.dispose();
@@ -205,17 +219,52 @@ export class GameRenderer {
     const bloom = this.environment.bloom;
     if (bloom) {
       // Light sources (lanterns, portals, the sun) are brighter than white, so only they bloom.
-      this.composer = new EffectComposer(this.renderer);
+      // A multisampled buffer: the composer's default one has no anti-aliasing, so every edge was jagged.
+      this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
       this.composer.addPass(new RenderPass(this.scene, this.camera));
       this.composer.addPass(new UnrealBloomPass(new THREE.Vector2(1, 1), bloom.strength, bloom.radius, bloom.threshold));
       this.composer.addPass(new OutputPass());
     }
     this.worldId = id;
+    this.host.dataset.world = id;
     this.worldSeed = seed;
     this.resize();
     // Build the opening scenery and compile shaders now (on the menu), not on the first frame of a run.
     this.environment.update(this.camera, this.originDistance - this.camera.position.z, 0);
-    this.renderer.compile(this.scene, this.camera);
+    const scene = this.precompile(this.scene);
+    // Track pieces, hazards and fuel cells only exist once the course streams in, so the call above
+    // misses them; without this their shaders compile mid-run, freezing the frame where each first appears.
+    const samples = new THREE.Group();
+    samples.add(...this.surfaces.samples(), ...this.obstacles.samples(), ...this.pickups.samples());
+    const track = this.precompile(samples);
+    this.environment.prepare?.(object => void this.precompile(object));
+    // The bloom passes compile their own shaders on their first frame: draw one now, behind the menu.
+    const composer = this.composer;
+    if (composer) void Promise.all([scene, track]).then(() => { if (composer === this.composer) composer.render(0); });
+  }
+
+  /**
+   * Prepares objects that will be drawn with this scene's lights: compiles their shaders in the
+   * background and uploads their textures to the GPU now, so neither stalls the frame they first
+   * appear in (a detailed model's textures can take half a second to upload). Programs depend on
+   * the target drawn into: with bloom that is the composer's buffer (linear, no tone mapping), not
+   * the screen, so compiling for the screen would not match what a frame uses.
+   */
+  precompile(object: THREE.Object3D): Promise<void> {
+    const previous = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.composer?.readBuffer ?? null);
+    // compileAsync builds the programs before it returns; only the wait for them is asynchronous.
+    const done = this.renderer.compileAsync(object, this.camera, this.scene);
+    this.renderer.setRenderTarget(previous);
+    const textures = new Set<THREE.Texture>();
+    object.traverse(o => {
+      const material = (o as THREE.Mesh).material;
+      for (const m of Array.isArray(material) ? material : material ? [material] : []) {
+        for (const value of Object.values(m)) if ((value as THREE.Texture | null)?.isTexture) textures.add(value as THREE.Texture);
+      }
+    });
+    for (const texture of textures) this.renderer.initTexture(texture);
+    return done.then(() => {}, () => {});
   }
 
   resize() {
@@ -230,6 +279,7 @@ export class GameRenderer {
   /** Called on restart: snap camera and drop per-attempt view state. */
   reset() {
     this.rig.reset();
+    this.environment?.reset?.();
     this.pickups.clear();
     this.surfaces.clear();
     this.route.clear();
@@ -279,8 +329,10 @@ export class GameRenderer {
       this.camera.fov += (fov - this.camera.fov) * Math.min(1, frameDt * 4);
       this.camera.updateProjectionMatrix();
     }
-    this.carLight.position.set(pos.x, pos.y + 1.5, pos.z - 2);
-    this.rig.update(pos, frameDt);
+    // Ahead of and above the car, lighting the road it is about to cross. Just above the roof it put a
+    // pinpoint highlight on mirror-smooth glass, which the bloom pass blew up into a blinding flare.
+    this.carLight.position.set(pos.x, pos.y + 3, pos.z - 8);
+    this.rig.update(pos, frameDt, sim.vehicle.flying);
     // The camera's logical distance drives scenery that scrolls slower than the track.
     this.environment?.update(this.camera, origin - this.camera.position.z, frameDt);
     if (this.composer) this.composer.render(frameDt);
@@ -294,6 +346,7 @@ export class GameRenderer {
     this.pickups.dispose();
     this.environment?.dispose();
     this.composer?.dispose();
+    this.composer = null;
     // Car parts share several geometries/materials. Dispose each remaining
     // scene resource once after views release their own cached assets.
     const geometries = new Set<THREE.BufferGeometry>();

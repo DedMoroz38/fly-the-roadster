@@ -21,6 +21,18 @@ export function useSnapshot(game: Game | null): SessionSnapshot | null {
   return snap;
 }
 
+/** What the flying-section banner says; `flying` is the car's actual state, the cue is the course's plan. */
+export function flightMessage(cue: SessionSnapshot['flightCue'], flying: boolean, touch: boolean): { label: string; text: string } | null {
+  if (!cue) return null;
+  const lift = touch ? 'LIFT' : 'Space', bank = touch ? 'the pad' : '← →';
+  switch (cue.phase) {
+    case 'approach': return { label: 'FLIGHT AHEAD', text: `The road ends in ${Math.round(cue.metres / 10) * 10} m. Hold ${lift} to take off.` };
+    case 'takeoff': return { label: 'TAKE OFF', text: `Hold ${lift} now: the road ends in ${Math.round(cue.metres)} m.` };
+    case 'flying': return { label: 'FLYING · UNLIMITED FUEL', text: `${lift} lifts, ${bank} bank to steer. Fly through the gaps.` };
+    case 'landing': return flying || cue.metres > 0 ? { label: 'LAND', text: cue.metres > 0 ? `Road returns in ${Math.round(cue.metres / 10) * 10} m. Sink toward it.` : 'Touch down on the road.' } : null;
+  }
+}
+
 const FLIP_NAME: Record<number, string> = { 1: 'Flip', 2: 'Double flip', 3: 'Triple flip', 4: 'Quad flip' };
 
 const CONTROLS: [string, string][] = [
@@ -47,7 +59,7 @@ const TOUCH_CONTROLS: [string, string][] = [
 const CHALLENGE_LABEL: Record<string, string> = {
   normal: 'Floor run', gap: 'Flight gap', ceiling: 'Ceiling crossing',
   'wall-left': 'Left wall crossing', 'wall-right': 'Right wall crossing',
-  multiple: 'Surface transitions', flight: 'Extended flight', hurdle: 'Barrier jumps',
+  multiple: 'Surface transitions', flight: 'Extended flight', hurdle: 'Barrier jumps', fly: 'Flying section',
 };
 
 /** Detailed telemetry is opt-in; the upcoming maneuver remains visible in normal play. */
@@ -101,6 +113,7 @@ function HelpPanel({ touch, onResume }: { touch: boolean; onResume: () => void }
         <li>Cruising is automatic and uses no fuel. Release W / ↑ to ease back to cruise speed.</li>
         <li>Landing on the roof ends the run. Roll upright before returning to the road.</li>
         <li>Bars hanging from a ceiling: release Shift just before one so the car drops under it, then hold Shift again right away to pull back up. Just after letting go, suction reaches further and pulls harder.</li>
+        <li>Every so often (first at about 6000 pts) the road ends and you <b>fly</b> for about 2000 m: unlimited fuel, no floor, walls or ceiling, only gates and pillars to fly around. Space lifts, ← → bank the car (it cannot flip) and it levels out when you let go. Land on the road when it returns.</li>
         <li>You score a point per metre. Full rolls in one jump pay a bonus on a safe landing: 1 flip {flipPoints(1)}, 2 flips {flipPoints(2)}, 3 flips {flipPoints(3)}.</li>
       </ul>
       {touch
@@ -138,6 +151,7 @@ export function Hud({ game }: { game: Game | null }) {
     vehicleId={game?.vehicleId ?? DEFAULT_VEHICLE} onCycleVehicle={step => game?.cycleVehicle(step)} />;
 
   const fuelPct = Math.round(s.fuel * 100);
+  const cue = flightMessage(s.flightCue, s.flying, touch);
   const heatPct = Math.round(s.suctionHeat / CONFIG.suction.criticalHeat * 100);
   const heatWarning = s.suctionHeat >= CONFIG.suction.warningHeat;
   return (
@@ -155,9 +169,13 @@ export function Hud({ game }: { game: Game | null }) {
         </div>
       </div>
 
-      {s.debug && <div className="route-cue">
+      {s.debug && s.debug.kind !== 'fly' && !s.flying && <div className="route-cue">
         <span className="label">{CHALLENGE_LABEL[s.debug.kind] ?? s.debug.kind}</span>
         <strong>{s.debug.nextAction || s.debug.phase}</strong>
+      </div>}
+      {cue && <div className={`flight-banner flight-${s.flightCue!.phase}`} role="status">
+        <span className="label">{cue.label}</span>
+        <strong>{cue.text}</strong>
       </div>}
       {flip && <div key={flip.id} className="flip-award" role="status">
         <span className="flip-name">{FLIP_NAME[flip.flips] ?? `${flip.flips}× flip`}</span>
@@ -167,10 +185,10 @@ export function Hud({ game }: { game: Game | null }) {
       <DebugPanel snapshot={s} />
 
       <div className="hud-bottom">
-        <div className={`fuel ${s.fuelEmpty ? 'empty' : fuelPct < 25 ? 'low' : ''}`}>
+        <div className={`fuel ${s.flying ? 'unlimited' : s.fuelEmpty ? 'empty' : fuelPct < 25 ? 'low' : ''}`}>
           <span className="label">FUEL</span>
           <div className="bar"><div className="fill" style={{ width: `${fuelPct}%` }} /></div>
-          <span className="pct">{s.fuelEmpty ? 'EMPTY' : `${fuelPct}%`}</span>
+          <span className="pct">{s.flying ? '∞' : s.fuelEmpty ? 'EMPTY' : `${fuelPct}%`}</span>
         </div>
         <div className={`heat ${s.suctionOverheated ? 'locked' : heatWarning ? 'warning' : ''}`}>
           <span className="label">SUCTION HEAT</span>

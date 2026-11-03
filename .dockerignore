@@ -6,3 +6,7 @@ docs
 *.log
 # Source model; the game ships the light bake (tesla_roadster_2026.lite.glb)
 models/tesla_roadtser_2026.glb
+# Downloaded Mars props; the game ships the optimised copies in models/mars
+models/mars/source
+# Downloaded space models; the game ships the optimised copies in models/space
+models/space/source

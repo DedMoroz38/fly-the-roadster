@@ -9,7 +9,7 @@ import type { Slab, SurfaceType } from '../surfaces';
 import { PLANNER_CONFIG as P } from './plannerConfig';
 import { paceFor, type Pace } from './generatorConfig';
 
-export type ScenarioKind = 'normal' | 'gap' | 'ceiling' | 'wall-left' | 'wall-right' | 'multiple' | 'flight' | 'hurdle';
+export type ScenarioKind = 'normal' | 'gap' | 'ceiling' | 'wall-left' | 'wall-right' | 'multiple' | 'flight' | 'hurdle' | 'fly';
 export interface ReachableState {
   x: number; y: number; roll: number; vx: number; vy: number; forward: number; rollVelocity: number;
   fuel: number; heat: number; overheated: boolean; suctionOn: boolean; surface: SurfaceType | null;
@@ -57,6 +57,8 @@ export interface PlannedChunk {
   slabs: Omit<Slab, 'id'>[]; pickups: PickupLike[]; obstacles: ObstacleLike[]; route: RouteWaypoint[];
   plan: ManeuverPhase[]; entry: ReachableState; exit: ReachableState; validation: PlanValidation;
   witness: { dt: number; controls: ControlState[]; samples: RouteWaypoint[]; phaseIndices: number[] };
+  /** Flying section: the stretch of this chunk, in forward distance, with unlimited fuel and no floor. */
+  flight?: { from: number; to: number; zone: { start: number; from: number; to: number; end: number } };
 }
 export interface PlanChunkOptions {
   id: number; seed: number; d0: number; kind: ScenarioKind; difficulty: number; entry: ReachableState;

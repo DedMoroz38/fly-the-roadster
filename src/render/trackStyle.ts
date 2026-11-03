@@ -17,7 +17,8 @@ export interface SurfaceStyle {
 
 /** Full-width barriers are jumped, gates have one opening, everything else is a block to steer around. */
 export type ObstacleKind = 'block' | 'gate' | 'barrier';
-export function obstacleKind(o: { y: number; half: { x: number; y: number } }): ObstacleKind {
+export function obstacleKind(o: { y: number; half: { x: number; y: number }; kind?: ObstacleKind }): ObstacleKind {
+  if (o.kind) return o.kind;
   if (o.half.x >= CONFIG.corridor.halfWidth) return 'barrier';
   const onFloor = Math.abs(o.y - o.half.y) < 1e-6;
   // Ordinary floor blocks are 0.8 m half-wide; wider floor pieces belong to a gate.

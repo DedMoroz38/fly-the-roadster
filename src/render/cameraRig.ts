@@ -12,7 +12,14 @@ export interface CameraGoal {
  * that wall/ceiling driving stays readable, clamped inside the corridor to avoid clipping.
  * The car's roll is deliberately ignored: the camera never barrel-rolls.
  */
-export function cameraGoal(car: { x: number; y: number; z: number }): CameraGoal {
+export function cameraGoal(car: { x: number; y: number; z: number }, flying = false): CameraGoal {
+  if (flying) {
+    // No corridor to stay inside: sit behind and a little above the car and look along its path.
+    return {
+      position: { x: lerp(car.x, 0, 0.3), y: car.y + 2.8, z: car.z + 11 },
+      lookAt: { x: lerp(car.x, 0, 0.15), y: car.y + 0.4, z: car.z - 16 },
+    };
+  }
   const { halfWidth: W, height: H } = CONFIG.corridor;
   const reach = CONFIG.car.halfExtents.y;
   // Unit-ish direction from the car toward the corridor centre: the camera sits on the
@@ -48,8 +55,8 @@ export class CameraRig {
     this.camera.position.z += delta;
   }
 
-  update(car: { x: number; y: number; z: number }, dt: number) {
-    const g = cameraGoal(car);
+  update(car: { x: number; y: number; z: number }, dt: number, flying = false) {
+    const g = cameraGoal(car, flying);
     if (!this.initialized) {
       this.pos.set(g.position.x, g.position.y, g.position.z);
       this.look.set(g.lookAt.x, g.lookAt.y, g.lookAt.z);

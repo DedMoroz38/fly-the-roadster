@@ -7,7 +7,7 @@ import { WORLDS } from '../src/render/worlds';
 import { buildIslandTile, ISLAND_CONFIG } from '../src/render/voxel/islands';
 import { B, meshVolume, Volume } from '../src/render/voxel/mesher';
 import { buildMountainTile, MOUNTAIN_CONFIG } from '../src/render/voxel/mountains';
-import { ParallaxLayer, sceneryPosition, tileWorldZ } from '../src/render/voxel/parallax';
+import { ParallaxLayer, sceneryPosition, tileWorldZ } from '../src/render/parallax';
 import { atlasRect, TEX, TEXTURE_NAMES, texturePixels } from '../src/render/voxel/textures';
 import { VOXEL_SURFACES } from '../src/render/voxel/trackStyle';
 
@@ -143,8 +143,9 @@ describe('parallax scrolling', () => {
 });
 
 describe('Steve’s voxel world', () => {
-  it('belongs to Steve; every other vehicle keeps the neon grid', () => {
-    for (const vehicle of VEHICLES) expect(vehicleWorld(vehicle.id)).toBe(vehicle.id === 'steve' ? 'voxel' : 'neon');
+  it('belongs to Steve; vehicles without a world of their own keep the neon grid', () => {
+    const own: Record<string, string> = { steve: 'voxel', cybertruck: 'mars', roadster: 'orbit', dino: 'dino' };
+    for (const vehicle of VEHICLES) expect(vehicleWorld(vehicle.id)).toBe(own[vehicle.id] ?? 'neon');
     expect(WORLDS.voxel.surfaces).toBe(VOXEL_SURFACES);
   });
 

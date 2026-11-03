@@ -14,9 +14,20 @@ export function neonPickups(): PickupStyle {
   };
 }
 
+/** Point lights that follow the nearest fuel cells. */
+export const PICKUP_LIGHTS = 2;
+
 /** Glowing, spinning fuel cells kept in sync with the level's active pickups. */
 export class PickupView {
   readonly group = new THREE.Group();
+  /**
+   * A fixed pool of lights that follows the nearest cells. A light per cell would change the scene's
+   * light count at every pickup, and three.js recompiles every lit material when it does: a freeze
+   * of seconds in worlds with many materials. Unused lights stay in the scene at zero intensity.
+   */
+  readonly lights = new THREE.Group();
+  private readonly pool: THREE.PointLight[];
+  private carDistance = 0;
   private items = new Map<number, THREE.Group>();
   private beamGeo = new THREE.CylinderGeometry(0.3, 0.3, 1, 16, 1, true);
   private beamMat: THREE.MeshBasicMaterial;
@@ -27,7 +38,17 @@ export class PickupView {
   private originDistance = 0;
 
   constructor(private readonly style: PickupStyle = neonPickups()) {
+    this.pool = Array.from({ length: PICKUP_LIGHTS }, () => {
+      const light = new THREE.PointLight(style.light, 0, 14, 1.5);
+      this.lights.add(light);
+      return light;
+    });
     this.beamMat = new THREE.MeshBasicMaterial({ color: style.beam, transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false });
+  }
+
+  /** A cell with its ring and beam, for compiling shaders before the first cell appears. */
+  samples(): THREE.Object3D[] {
+    return [new THREE.Mesh(this.style.core, this.style.coreMaterial), this.style.ring(), new THREE.Mesh(this.beamGeo, this.beamMat)];
   }
 
   sync(level: Level, carDistance?: number, originDistance = 0) {
@@ -37,6 +58,7 @@ export class PickupView {
       for (const burst of this.bursts) burst.mesh.position.z += delta;
       this.originDistance = originDistance;
     }
+    if (carDistance !== undefined) this.carDistance = carDistance;
     const active = level.activePickups;
     if (!active) return;
     for (const [id, obj] of this.items) {
@@ -53,8 +75,6 @@ export class PickupView {
       const g = new THREE.Group();
       g.add(new THREE.Mesh(this.style.core, this.style.coreMaterial));
       g.add(this.style.ring());
-      const light = new THREE.PointLight(this.style.light, 14, 14, 1.5);
-      g.add(light);
       // A tall translucent beam across the corridor makes the cell visible from far away.
       const beam = new THREE.Mesh(this.beamGeo, this.beamMat);
       const s = (p as { surface?: string }).surface;
@@ -96,6 +116,16 @@ export class PickupView {
       (b.mesh.material as THREE.Material).dispose();
     }
     this.bursts = this.bursts.filter((x) => x.age <= 0.5);
+    // Light the nearest cells ahead of the car (or just passed); the rest of the pool stays dark.
+    const lit = [...this.items.keys()]
+      .map(id => ({ id, ahead: this.known.get(id)!.d - this.carDistance }))
+      .filter(c => c.ahead > -8)
+      .sort((a, b) => a.ahead - b.ahead);
+    this.pool.forEach((light, i) => {
+      const cell = lit[i] && this.items.get(lit[i].id);
+      light.intensity = cell ? 14 : 0;
+      if (cell) light.position.copy(cell.position);
+    });
     const bob = Math.sin(this.time * 3) * 0.12;
     for (const g of this.items.values()) {
       g.children[0].rotation.y = this.time * 2;

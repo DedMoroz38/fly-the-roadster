@@ -2,6 +2,7 @@ import { wrapAngle } from '../core/math';
 import { CONFIG } from './config';
 import { ControlState } from './input';
 import { Simulation } from './simulation';
+import type { FlightCue } from './course/flight';
 
 export type SessionState = 'ready' | 'running' | 'paused' | 'gameover';
 export type FailReason = 'fell' | 'crashed' | 'flipped' | 'stranded';
@@ -49,7 +50,10 @@ export class FailureMonitor {
     const { halfWidth: W, height: H } = CONFIG.corridor;
     const m = CONFIG.fail.outsideMargin;
     const p = sim.vehicle.position;
-    if (p.y < -m || p.y > H + m || Math.abs(p.x) > W + m) return 'fell';
+    if (sim.vehicle.flying) {
+      const box = CONFIG.flight.bounds;
+      if (p.y < box.minY || p.y > box.maxY || Math.abs(p.x) > box.halfWidth) return 'fell';
+    } else if (p.y < -m || p.y > H + m || Math.abs(p.x) > W + m) return 'fell';
     if (this.landedOnRoof(sim)) return 'flipped';
 
     const fwd = sim.vehicle.forwardSpeed;
@@ -115,6 +119,8 @@ export interface SessionSnapshot {
   totalSpeed: number;
   forwardVelocity: number;
   fuel: number; // 0..1
+  /** In a flying section: unlimited fuel, banked roll, no floor or walls. */
+  flying: boolean;
   fuelEmpty: boolean;
   suctionOn: boolean;
   suctionHeat: number;
@@ -128,6 +134,8 @@ export interface SessionSnapshot {
   helpOpen: boolean;
   debugEnabled: boolean;
   debug?: CourseDebugInfo;
+  /** Warning, take-off, flying or landing, when a flying section is near. */
+  flightCue: FlightCue | null;
   terrainStatus: string | null;
 }
 
@@ -255,6 +263,7 @@ export class GameSession {
     const velocity = v.body.linvel();
     const level = this.sim.level as typeof this.sim.level & {
       debugInfo?: (distance: number) => CourseDebugInfo | undefined;
+      flightCue?: (distance: number) => FlightCue | null;
       terrainStatus?: string | null;
     };
     return {
@@ -267,6 +276,7 @@ export class GameSession {
       totalSpeed: Math.hypot(velocity.x, velocity.y, velocity.z),
       forwardVelocity: -velocity.z,
       fuel: this.sim.fuel.fraction,
+      flying: v.flying,
       fuelEmpty: this.sim.fuel.isEmpty,
       suctionOn: v.suctionOn,
       suctionHeat: v.suctionHeat,
@@ -280,6 +290,7 @@ export class GameSession {
       helpOpen: this.helpOpen,
       debugEnabled: this.debugEnabled,
       debug: level.debugInfo?.(this.sim.distance),
+      flightCue: level.flightCue?.(this.sim.distance) ?? null,
       terrainStatus: level.terrainStatus ?? null,
     };
   }

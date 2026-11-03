@@ -9,24 +9,37 @@ import steveUrl from '../../models/steve_in_a_boat.glb?url';
 import type { WorldId } from './worlds';
 
 /** Sketchfab models are CC-BY-4.0: the menu shows this credit while the model is selected. */
-export interface VehicleCredit { title: string; author: string; url: string }
+export interface VehicleCredit {
+  title: string; author: string; url: string;
+  /** Defaults to CC BY 4.0, the licence of most models here. */
+  license?: { label: string; url: string };
+}
+export const CC_BY = { label: 'CC BY 4.0', url: 'https://creativecommons.org/licenses/by/4.0/' };
+export const CC_BY_NC_SA = { label: 'CC BY-NC-SA 4.0', url: 'https://creativecommons.org/licenses/by-nc-sa/4.0/' };
 
 /**
  * A selectable look for the car. Every vehicle uses the same physics body; only the mesh changes.
  * `yaw` turns the model so its front faces −Z (forward); `strip` removes scenery parts by node name.
  */
-export interface VehicleOption { id: string; name: string; url: string; yaw: number; strip?: RegExp; credit?: VehicleCredit; world?: WorldId }
+export interface VehicleOption {
+  id: string; name: string; url: string; yaw: number; strip?: RegExp; credit?: VehicleCredit; world?: WorldId;
+  /** Showroom armour-glass demo (gun and steel ball on the menu); `glass` names the window material. */
+  armory?: { glass: string };
+  /** Stunt show on the menu (a "Show demo" button): the car drives past parked cars and flips. */
+  demo?: boolean;
+}
 
 export const VEHICLES: readonly VehicleOption[] = [
   { id: 'charger', name: 'Fast Charger', url: chargerUrl, yaw: Math.PI },
-  { id: 'roadster', name: 'Tesla Roadster', url: roadsterUrl, yaw: Math.PI,
+  { id: 'roadster', name: 'Tesla Roadster', url: roadsterUrl, yaw: Math.PI, world: 'orbit', demo: true,
     credit: { title: 'Tesla Roadtser 2026', author: 'asiphy007', url: 'https://sketchfab.com/3d-models/tesla-roadtser-2026-7630c9fe842d4f5ea86fc1f122753b89' } },
-  { id: 'cybertruck', name: 'Cybertruck', url: cybertruckUrl, yaw: Math.PI,
+  // Its windows are the black, mirror-smooth Material.001.
+  { id: 'cybertruck', name: 'Cybertruck', url: cybertruckUrl, yaw: Math.PI, world: 'mars', armory: { glass: 'Material.001' },
     credit: { title: 'Tesla Cybertruck', author: 'Lexyc16', url: 'https://sketchfab.com/3d-models/tesla-cybertruck-f12e67159f75486bb21213e573520612' } },
   { id: 'delorean', name: 'DeLorean', url: deloreanUrl, yaw: Math.PI,
     credit: { title: 'DeLorean Time Machine - Flying Mode', author: 'Sea Land Air', url: 'https://sketchfab.com/3d-models/delorean-time-machine-flying-mode-b77a3d1927564ea3a78d1229f1b21573' } },
   // A flat, side-on sprite model: its head points along +X.
-  { id: 'dino', name: 'Chrome Dino', url: dinoUrl, yaw: Math.PI / 2,
+  { id: 'dino', name: 'Chrome Dino', url: dinoUrl, yaw: Math.PI / 2, world: 'dino',
     credit: { title: '3D Chrome Dino Walking', author: 'MayMax', url: 'https://sketchfab.com/3d-models/3d-chrome-dino-walking-fb6f49c248494011b6b9cac7326f1a91' } },
   // Faces +Z already; the scene includes a square of water tiles (cube_N) around the boat.
   { id: 'steve', name: 'Steve in a Boat', url: steveUrl, yaw: 0, strip: /^cube_\d+$/, world: 'voxel',

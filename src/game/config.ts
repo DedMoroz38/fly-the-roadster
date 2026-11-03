@@ -43,6 +43,23 @@ export const CONFIG = {
     rollFuelRate: 0.08,
   },
 
+  /**
+   * Flying sections: no floor, walls or ceiling, only objects to fly around. Fuel is unlimited and
+   * the controls are the same, but rolling banks the car (it cannot flip) and levels out on release.
+   */
+  flight: {
+    maxBankDeg: 60,
+    bankGain: 5, // 1/s: target roll rate per radian of bank error
+    bankRate: 4, // rad/s
+    bankAccel: 40, // rad/s²
+    gravityScale: 0.6,
+    liftAccel: 30,
+    /** Vertical air drag (1/s), so a lift pulse does not run away. */
+    verticalDrag: 0.35,
+    /** Play volume: beyond it the run ends. */
+    bounds: { halfWidth: 20, minY: -6, maxY: 46 },
+  },
+
   fuel: {
     capacity: 2.5, // seconds of continuous thrust
     pickupRadius: 2.6,

@@ -71,6 +71,11 @@ export class SurfaceView {
     this.edgeMaterials = each(s => style.edge(s, this.gridOrigin));
   }
 
+  /** One mesh per material, for compiling shaders before the first slab appears. */
+  samples(): THREE.Object3D[] {
+    return [...Object.values(this.materials).map(m => new THREE.Mesh(this.boxGeo, m)), ...Object.values(this.edgeMaterials).map(m => new THREE.Mesh(this.edgeGeo, m))];
+  }
+
   sync(slabs: SlabSet, originDistance = 0) {
     if (this.source !== slabs) {
       this.clear();
